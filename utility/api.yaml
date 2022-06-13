@@ -1,0 +1,163 @@
+swagger: "2.0"
+info:
+  contact:
+    name: Kari Kangas (karijkangas@gmail.com)
+  description: ""
+  license:
+    name: MIT
+  title: Gotagsavaruus REST API
+  version: 0.0.1
+host: localhost.com:8000
+basePath: /api
+schemes:
+  - http
+produces:
+  - application/json
+consumes:
+  - application/json
+paths:
+  /signups/check:
+    post:
+      description: |
+        Check email availability. Email is available if there is no existing user registered
+        with a matching email.
+      parameters:
+        - description: Signup check data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/SignupsCheck"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Email available
+        "400":
+          description: Invalid data
+        "409":
+          description: Email not available
+  /signups/:
+    post:
+      description: |
+        Create a signup request and send an email with a verification link.
+      parameters:
+        - description: Signup data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/Signup"
+      produces:
+        - application/json
+      responses:
+        "201":
+          description: Signup request created and verification email sent.
+        "400":
+          description: Invalid data
+        "409":
+          description: Email not available
+  /signups/verify:
+    post:
+      description: |
+        Create an user account from the signup request, or alternatively modify existing user to
+        match the signup request data. All pending signup requests with the same email are discarded.
+        Returns a session token.
+      parameters:
+        - description: Signup request id
+          in: query
+          name: id
+          required: true
+          type: string
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Token.
+          schema:
+            $ref: "#/definitions/Token"
+        "404":
+          description: Invalid signup request
+  /signin/:
+    post:
+      description: |
+        Signin with email and password.
+      parameters:
+        - description: Signin data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/Signin"
+      produces:
+        - application/json
+      responses:
+        "201":
+          description: Token
+          schema:
+            $ref: "#/definitions/Token"
+        "400":
+          description: Invalid data
+  /auth/account/:
+    delete:
+      description: |
+        Delete account.
+      parameters:
+        - description: Delete account data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/DeleteAccount"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Account deleted
+        "400":
+          description: Invalid password
+        "401":
+          description: Invalid token
+definitions:
+  SignupsCheck:
+    properties:
+      email:
+        type: string
+    required:
+      - email
+    type: object
+  Signup:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      password:
+        type: string
+    required:
+      - name
+      - email
+      - password
+    type: object
+  Signin:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    required:
+      - email
+      - password
+    type: object
+  Token:
+    properties:
+      token:
+        type: string
+    type: object
+  DeleteAccount:
+    properties:
+      password:
+        type: string
+    required:
+      - password
+    type: object
