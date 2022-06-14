@@ -40,7 +40,7 @@ paths:
   /signups/:
     post:
       description: |
-        Create a signup request and send an email with a verification link.
+        Create or modify a signup request and send an email with a verification link.
       parameters:
         - description: Signup data
           in: body
@@ -51,8 +51,8 @@ paths:
       produces:
         - application/json
       responses:
-        "201":
-          description: Signup request created and verification email sent.
+        "200":
+          description: Signup request stored and verification email sent.
         "400":
           description: Invalid data
         "409":
@@ -60,15 +60,15 @@ paths:
   /signups/verify:
     post:
       description: |
-        Create an user account from the signup request, or alternatively modify existing user to
-        match the signup request data. All pending signup requests with the same email are discarded.
+        Create an user account from the signup request. Request is discarded.
         Returns a session token.
       parameters:
-        - description: Signup request id
-          in: query
-          name: id
+        - description: Signup verify data
+          in: body
+          name: data
           required: true
-          type: string
+          schema:
+            $ref: "#/definitions/VerifySignup"
       produces:
         - application/json
       responses:
@@ -98,6 +98,28 @@ paths:
             $ref: "#/definitions/Token"
         "400":
           description: Invalid data
+  /resetpw/:
+    post:
+      description: |
+        Create a reset password request and send an email with a verification link.
+      parameters:
+        - description: Reset password data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/ResetPassword"
+      produces:
+        - application/json
+      responses:
+        "201":
+          description: Signup request created and verification email sent.
+          schema:
+            $ref: "#/definitions/Token"
+        "400":
+          description: Invalid data
+        "404":
+          description: Unknown email
   /auth/account/:
     delete:
       description: |
@@ -137,6 +159,16 @@ definitions:
     required:
       - name
       - email
+      - password
+    type: object
+  VerifySignup:
+    properties:
+      id:
+        type: string
+      password:
+        type: string
+    required:
+      - id
       - password
     type: object
   Signin:
