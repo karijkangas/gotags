@@ -6,16 +6,20 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-co-op/gocron"
 )
 
 const (
 	passwordHashCost = bcrypt.DefaultCost
+	cleanupDBTimeUTC = "04:00"
+	verificationsTTL = "'1 day'"
 )
 
 type mailer func(email, url string) error
@@ -80,10 +84,20 @@ func (a *GoTags) initialize(databaseURL string) {
 	a.pool = pool
 	a.router = router
 	a.mailer = sasMailer
+
+	s := gocron.NewScheduler(time.UTC)
+	s.Every(1).Day().At(cleanupDBTimeUTC).Do(a.cleanupDB)
+	s.StartAsync()
 }
 
 func (a *GoTags) run(server string) {
 	a.router.Run(server)
+}
+
+func (a *GoTags) cleanupDB() {
+	log.Printf("Running database cleanup")
+	a.pool.Exec(context.Background(),
+		fmt.Sprintf(`DELETE FROM verifications WHERE created_at < now() - interval %s;`, verificationsTTL))
 }
 
 //
