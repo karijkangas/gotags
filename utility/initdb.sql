@@ -18,8 +18,7 @@ CREATE TABLE IF NOT EXISTS verifications (
   category verification_category,
   data JSONB,
   created_at TIMESTAMP WITH TIME ZONE default current_timestamp,
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  CONSTRAINT unique_per_category UNIQUE (email, category)
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
 );
 
 CREATE TABLE IF NOT EXISTS users (

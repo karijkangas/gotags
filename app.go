@@ -104,7 +104,6 @@ func (a *GoTags) checkSignup(c *gin.Context) {
 		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1);`,
 		email)
 	err := row.Scan(&exists)
-
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -114,14 +113,13 @@ func (a *GoTags) checkSignup(c *gin.Context) {
 		c.Status(http.StatusConflict)
 		return
 	}
-
 	c.Status(http.StatusOK)
 }
 
 //
 func (a *GoTags) signup(c *gin.Context) {
 	var d struct {
-		Name     string `json:"name" binding:"required"`
+		Name     string `json:"name" binding:"required,min=1"`
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=1"`
 	}
@@ -165,9 +163,6 @@ func (a *GoTags) signup(c *gin.Context) {
 		context.Background(),
 		`INSERT INTO verifications (email, category, data)
 			VALUES ($1, 'signup', $2)
-			ON CONFLICT ON CONSTRAINT unique_per_category
-			DO UPDATE
-			SET data=EXCLUDED.data
 			RETURNING id;`,
 		email, data)
 	err = row.Scan(&uuid)
@@ -254,6 +249,8 @@ func (a *GoTags) verifySignup(c *gin.Context) {
 	b.Queue(`DELETE FROM verifications WHERE email = $1 AND category = 'signup';`, email)
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
 	r := a.pool.SendBatch(context.Background(), b)
+	defer r.Close()
+
 	r.Exec()           // delete, ignore errors
 	row = r.QueryRow() // insert
 	err = row.Scan(&token)
@@ -344,21 +341,9 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	var uuid string
 	row = a.pool.QueryRow(
 		context.Background(),
-		// `INSERT INTO verifications (email, category)
-		// 	VALUES ($1, 'reset_password')
-		// 	ON CONFLICT ON CONSTRAINT unique_per_category
-		// 	DO NOTHING
-		// 	RETURNING id;`,
-		`WITH insert_reset_password AS (
-			INSERT INTO verifications (email, category)
+		`INSERT INTO verifications (email, category)
 			VALUES ($1, 'reset_password')
-			ON CONFLICT ON CONSTRAINT unique_per_category
-			DO NOTHING
-			RETURNING id
-		 ) SELECT COALESCE(
-			(SELECT id FROM insert_reset_password),
-			(SELECT id FROM verifications WHERE email = $1 AND category = 'reset_password')
-		 );`,
+			RETURNING id;`,
 		email)
 	err = row.Scan(&uuid)
 	if err != nil {
@@ -391,7 +376,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 func (a *GoTags) verifyResetPassword(c *gin.Context) {
 	var d struct {
 		ID       string `json:"id" binding:"required"`
-		Password string `json:"password" binding:"required"`
+		Password string `json:"password" binding:"required,min=1"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -421,12 +406,15 @@ func (a *GoTags) verifyResetPassword(c *gin.Context) {
 
 	//
 	b := &pgx.Batch{}
-	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2;`, passwordHash, email)
-	b.Queue(`DELETE FROM verifications WHERE email = $1 AND category = 'password_reset';`, email)
+	b.Queue(`DELETE FROM verifications WHERE email = $1 AND category = 'reset_password';`, email)
+	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id;`, passwordHash, email)
 	r := a.pool.SendBatch(context.Background(), b)
-	_, err = r.Exec()
-	r.Exec() // delete, ignore errors
+	defer r.Close()
 
+	r.Exec()           // delete, ignore errors
+	row = r.QueryRow() // update, check user gone
+	var user int
+	err = row.Scan(&user)
 	if err != nil {
 		c.Status(http.StatusGone)
 		return
@@ -448,6 +436,12 @@ func (a *GoTags) modifyAccount(c *gin.Context) {
 	name := d.Name
 	password := d.Password
 
+	// empty data
+	if name == "" && password == "" {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
 	var passwordHash string
 
 	if password != "" {
@@ -460,7 +454,7 @@ func (a *GoTags) modifyAccount(c *gin.Context) {
 	}
 	user := c.GetInt("user")
 
-	// TODO: better solution?
+	// TODO: a better solution?
 	i := 0
 	b := &pgx.Batch{}
 	if name != "" {
@@ -472,6 +466,7 @@ func (a *GoTags) modifyAccount(c *gin.Context) {
 		i++
 	}
 	r := a.pool.SendBatch(context.Background(), b)
+	defer r.Close()
 
 	for ; i > 0; i-- {
 		r.Exec()
@@ -490,12 +485,7 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 		return
 	}
 	password := d.Password
-
 	user := c.GetInt("user")
-	// if user == 0 {
-	// 	c.Status(http.StatusUnauthorized)
-	// 	return
-	// }
 
 	var passwordHash string
 	row := a.pool.QueryRow(

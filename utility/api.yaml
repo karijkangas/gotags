@@ -19,8 +19,8 @@ paths:
   /signups/check:
     post:
       description: |
-        Check email availability. Email is available if there is no existing user registered
-        with a matching email.
+        Check account availability. Account is available if there is no existing user registered
+        with a given email address.
       parameters:
         - description: Signup check data
           in: body
@@ -32,15 +32,15 @@ paths:
         - application/json
       responses:
         "200":
-          description: Email available
+          description: Account available
         "400":
           description: Invalid data
         "409":
-          description: Email not available
+          description: Account not available
   /signups/:
     post:
       description: |
-        Create or modify a signup request and send an email with a verification link.
+        Create a signup request. Sends an email with a signup verification link.
       parameters:
         - description: Signup data
           in: body
@@ -52,15 +52,16 @@ paths:
         - application/json
       responses:
         "200":
-          description: Signup request stored and verification email sent.
+          description: Signup request accepted
         "400":
           description: Invalid data
         "409":
-          description: Email not available
+          description: Account not available
   /signups/verify:
     post:
       description: |
-        Create an user account from the signup request. Request is discarded.
+        Verify signup request. Creates a user account matching the signup request data and
+        removes the request. Given password must match the password in the signup request data.
         Returns a session token.
       parameters:
         - description: Signup verify data
@@ -73,7 +74,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Token.
+          description: Token
           schema:
             $ref: "#/definitions/Token"
         "404":
@@ -92,7 +93,7 @@ paths:
       produces:
         - application/json
       responses:
-        "201":
+        "200":
           description: Token
           schema:
             $ref: "#/definitions/Token"
@@ -101,7 +102,7 @@ paths:
   /resetpw/:
     post:
       description: |
-        Create a reset password request and send an email with a verification link.
+        Create a reset password request. Sends an email with a verification link.
       parameters:
         - description: Reset password data
           in: body
@@ -113,14 +114,55 @@ paths:
         - application/json
       responses:
         "201":
-          description: Signup request created and verification email sent.
+          description: Reset password request accepted
           schema:
             $ref: "#/definitions/Token"
         "400":
           description: Invalid data
         "404":
           description: Unknown email
+  /resetpw/verify:
+    post:
+      description: |
+        Reset password and remove the request.
+      parameters:
+        - description: Reset password verify data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/VerifyResetPassword"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Token.
+          schema:
+            $ref: "#/definitions/Token"
+        "404":
+          description: Invalid password reset request
+        "410":
+          description: User matching email not found
   /auth/account/:
+    patch:
+      description: |
+        Modify account.
+      parameters:
+        - description: Modify account data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/ModifyAccount"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Account modified
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
     delete:
       description: |
         Delete account.
@@ -184,6 +226,30 @@ definitions:
   Token:
     properties:
       token:
+        type: string
+    type: object
+  ResetPassword:
+    properties:
+      email:
+        type: string
+    required:
+      - email
+    type: object
+  VerifyResetPassword:
+    properties:
+      id:
+        type: string
+      password:
+        type: string
+    required:
+      - id
+      - password
+    type: object
+  ModifyAccount:
+    properties:
+      name:
+        type: string
+      password:
         type: string
     type: object
   DeleteAccount:

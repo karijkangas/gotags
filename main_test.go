@@ -69,16 +69,6 @@ func addToken(req *http.Request, token string) {
 	}
 }
 
-func doPost(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
-	req, err := http.NewRequest("POST", path, bytes.NewBuffer(data))
-	if err != nil {
-		t.Fatalf("Invalid request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	addToken(req, token)
-	return doRequest(req)
-}
-
 func doGet(t *testing.T, path string, token string) *httptest.ResponseRecorder {
 	req, err := http.NewRequest("GET", path, nil)
 	if err != nil {
@@ -88,14 +78,47 @@ func doGet(t *testing.T, path string, token string) *httptest.ResponseRecorder {
 	return doRequest(req)
 }
 
-func doDelete(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
-	req, err := http.NewRequest("DELETE", path, bytes.NewBuffer(data))
+func doMethod(t *testing.T, method, path string, data []byte, token string) *httptest.ResponseRecorder {
+	req, err := http.NewRequest(method, path, bytes.NewBuffer(data))
 	if err != nil {
 		t.Fatalf("Invalid request: %s", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	addToken(req, token)
 	return doRequest(req)
+}
+
+func doPost(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
+	return doMethod(t, "POST", path, data, token)
+	// req, err := http.NewRequest("POST", path, bytes.NewBuffer(data))
+	// if err != nil {
+	// 	t.Fatalf("Invalid request: %s", err)
+	// }
+	// req.Header.Set("Content-Type", "application/json")
+	// addToken(req, token)
+	// return doRequest(req)
+}
+
+func doPatch(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
+	return doMethod(t, "PATCH", path, data, token)
+	// req, err := http.NewRequest("PATCH", path, bytes.NewBuffer(data))
+	// if err != nil {
+	// 	t.Fatalf("Invalid request: %s", err)
+	// }
+	// req.Header.Set("Content-Type", "application/json")
+	// addToken(req, token)
+	// return doRequest(req)
+}
+
+func doDelete(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
+	return doMethod(t, "DELETE", path, data, token)
+	// req, err := http.NewRequest("DELETE", path, bytes.NewBuffer(data))
+	// if err != nil {
+	// 	t.Fatalf("Invalid request: %s", err)
+	// }
+	// req.Header.Set("Content-Type", "application/json")
+	// addToken(req, token)
+	// return doRequest(req)
 }
 
 func doRequest(req *http.Request) *httptest.ResponseRecorder {
@@ -237,7 +260,7 @@ func addSession(t *testing.T, user int) string {
 	return id
 }
 
-func addUserWithSession(t *testing.T, name, email, password string) (user int, session string) {
+func addUserSession(t *testing.T, name, email, password string) (user int, session string) {
 	user = addUser(t, name, email, password)
 	session = addSession(t, user)
 	return
@@ -258,6 +281,18 @@ func addSignup(t *testing.T, name, email, password string) string {
 	err = app.pool.QueryRow(c,
 		`INSERT INTO verifications (email, category, data) VALUES ($1, 'signup', $2) RETURNING id;`,
 		email, data).Scan(&id)
+	if err != nil {
+		t.Fatalf("Query failed: %s.", err)
+	}
+	return id
+}
+
+func addResetPassword(t *testing.T, email string) string {
+	var id string
+	c := context.Background()
+	err := app.pool.QueryRow(c,
+		`INSERT INTO verifications (email, category) VALUES ($1, 'reset_password') RETURNING id;`,
+		email).Scan(&id)
 	if err != nil {
 		t.Fatalf("Query failed: %s.", err)
 	}
@@ -288,6 +323,8 @@ func getUser(t *testing.T, email string) (id int, name, passwordHash string) {
 	return id, name, passwordHash
 }
 
+// ******************************************************************
+
 //
 func TestMain(m *testing.M) {
 	app.initialize(databaseURL)
@@ -305,7 +342,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestCheckSignupOk(t *testing.T) {
+func TestCheckSignup(t *testing.T) {
 	clearTables(t, "users")
 
 	d := map[string]string{
@@ -333,7 +370,7 @@ func TestCheckSignupFails(t *testing.T) {
 	checkResponseBody(t, response, "", "/api/signups/check")
 }
 
-func TestCheckSignupInvalidData(t *testing.T) {
+func TestCheckSignupInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -342,6 +379,7 @@ func TestCheckSignupInvalidData(t *testing.T) {
 		{``, 400},
 		{`{`, 400},
 		{`{}`, 400},                   // no email
+		{`{"foo": 123}`, 400},         // no email
 		{`{"email": ""}`, 400},        // empty email
 		{`{"email": "foo@bar"}`, 400}, // invalid email
 	}
@@ -353,39 +391,41 @@ func TestCheckSignupInvalidData(t *testing.T) {
 	}
 }
 
-func TestSignupOk(t *testing.T) {
+func TestSignup(t *testing.T) {
 	clearTables(t, "verifications", "users")
 	resetMailer()
 
-	d := map[string]string{
-		"name":     "John Doe",
-		"email":    "johndoe@example.com",
-		"password": "password1234",
-	}
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
 
-	assertSignups(t, 0)
+	d := map[string]string{
+		"name":     name,
+		"email":    email,
+		"password": password,
+	}
 
 	response := doPost(t, "/api/signups", []byte(doMarshall(t, d)), "")
 	checkResponseCode(t, response, http.StatusCreated, "/api/signups")
 	checkResponseBody(t, response, "", "/api/signups")
 
-	id, name, email, passwordHash := getSignup(t)
+	sid, sname, semail, shash := getSignup(t)
 
-	if name != d["name"] || email != d["email"] {
-		t.Fatalf("unexpected signup. Got %s, %s. Want %s, %s", name, email, d["name"], d["email"])
+	if sname != name || semail != email {
+		t.Fatalf("unexpected signup. Got %s, %s. Want %s, %s", sname, semail, name, email)
 	}
-	if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(d["password"])) != nil {
+	if bcrypt.CompareHashAndPassword([]byte(shash), []byte(password)) != nil {
 		t.Fatalf("Unexpected password hash in signup.")
 	}
 
 	q := resetMailer()
-	if len(q) != 1 || q[0].email != d["email"] || !strings.Contains(q[0].url, id) {
-		t.Fatalf("Unexpected mailer data. Got %s, %s. Want %s, %s", q[0].email, q[0].url, d["email"], id)
+	if len(q) != 1 || q[0].email != email || !strings.Contains(q[0].url, sid) {
+		t.Fatalf("Unexpected mailer data. Got %s, %s. Want %s, %s", q[0].email, q[0].url, email, sid)
 	}
 	assertSignups(t, 1)
 }
 
-func TestSignupMultipleOk(t *testing.T) {
+func TestSignupMultiple(t *testing.T) {
 	clearTables(t, "verifications", "users")
 
 	var data = []map[string]string{{
@@ -405,9 +445,6 @@ func TestSignupMultipleOk(t *testing.T) {
 		"email":    "johndoe@example.com",
 		"password": "password4",
 	}}
-	unique := 2
-
-	assertSignups(t, 0)
 
 	for _, d := range data {
 		response := doPost(t, "/api/signups", []byte(doMarshall(t, d)), "")
@@ -416,28 +453,19 @@ func TestSignupMultipleOk(t *testing.T) {
 	}
 
 	signups := getSignups(t)
-	if len(signups) != unique {
-		t.Fatalf("Number of signups. Got %d. Want %d", len(signups), unique)
+	if len(signups) != len(data) {
+		t.Fatalf("Number of signups. Got %d. Want %d", len(signups), len(data))
 	}
 
-	s := signups[0]
-	d := data[3]
-
-	if s["name"] != d["name"] || s["email"] != d["email"] {
-		t.Fatalf("Unexpected signup data. Got %s. Want %s", s, d)
-	}
-	if bcrypt.CompareHashAndPassword([]byte(s["password_hash"]), []byte(d["password"])) != nil {
-		t.Fatalf("Unexpected password hash in signup.")
-	}
-
-	s = signups[1]
-	d = data[2]
-
-	if s["name"] != d["name"] || s["email"] != d["email"] {
-		t.Fatalf("Unexpected signup data. Got %s. Want %s", s, d)
-	}
-	if bcrypt.CompareHashAndPassword([]byte(s["password_hash"]), []byte(d["password"])) != nil {
-		t.Fatalf("Unexpected password hash in signup.")
+	for i := range data {
+		d := data[i]
+		s := signups[i]
+		if s["name"] != d["name"] || s["email"] != d["email"] {
+			t.Fatalf("Unexpected signup data. Got %s. Want %s", s, d)
+		}
+		if bcrypt.CompareHashAndPassword([]byte(s["password_hash"]), []byte(d["password"])) != nil {
+			t.Fatalf("Unexpected password hash in signup.")
+		}
 	}
 }
 
@@ -445,12 +473,16 @@ func TestSignupFails(t *testing.T) {
 	clearTables(t, "verifications", "users")
 	resetMailer()
 
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
 	d := map[string]string{
-		"name":     "John Doe",
-		"email":    "johndoe@example.com",
-		"password": "password1234",
+		"name":     name,
+		"email":    email,
+		"password": password,
 	}
-	addUser(t, d["name"], d["email"], d["password"])
+	addUser(t, name, email, password)
 
 	// existing user
 	response := doPost(t, "/api/signups", []byte(doMarshall(t, d)), "")
@@ -460,7 +492,9 @@ func TestSignupFails(t *testing.T) {
 	assertSignups(t, 0)
 }
 
-func TestSignupInvalidData(t *testing.T) {
+func TestSignupInvalid(t *testing.T) {
+	clearTables(t, "verifications")
+
 	type testData struct {
 		data string
 		code int
@@ -469,6 +503,7 @@ func TestSignupInvalidData(t *testing.T) {
 		{``, 400},
 		{`{`, 400},
 		{`{}`, 400},
+		{`{"foo": 123}`, 400}, // no data
 		{`{"email": "johndoe@example.com", "password": "password1234"}`, 400},            // no name
 		{`{"name":"", "email": "johndoe@example.com", "password": "password1234"}`, 400}, // empty name
 		{`{"name":"John Doe", "password": "password1234"}`, 400},                         // no email
@@ -476,20 +511,45 @@ func TestSignupInvalidData(t *testing.T) {
 		{`{"name":"John Doe", "email": "foo@bar", "password": "password1234"}`, 400},     // invalid email
 		{`{"name":"John Doe", "email": "johndoe@example.com"}`, 400},                     // no password
 		{`{"name":"John Doe", "email": "johndoe@example.com", "password": ""}`, 400},     // empty password
-		// {`{"name":"Foo Bar", "email": "foobar@example.com", "password": "password1234"}`, 200},
 	}
 
-	clearTables(t, "verifications")
-
 	for i, d := range data {
-		assertSignups(t, 0)
 		response := doPost(t, "/api/signups", []byte(d.data), "")
 		checkResponseCode(t, response, d.code, fmt.Sprintf("/api/signups#%d", i))
 		checkResponseBody(t, response, "", "/api/signups")
 	}
+	assertSignups(t, 0)
 }
 
-func TestVerifySignupFails(t *testing.T) {
+func TestSignupVerify(t *testing.T) {
+	clearTables(t, "verifications", "users")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	id := addSignup(t, name, email, password)
+
+	// verify signup and check token
+	d1 := map[string]string{
+		"ID":       id,
+		"password": password,
+	}
+	response := doPost(t, "/api/signups/verify", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/signups/verify")
+
+	assertSignups(t, 0)
+	assertUsers(t, 1)
+	assertSessions(t, 1)
+
+	var d2 tokenData
+	err := json.Unmarshal(response.Body.Bytes(), &d2)
+	if err != nil {
+		t.Fatalf("failed to unmarshall token: %s", err)
+	}
+}
+
+func TestSignupVerifyFails(t *testing.T) {
 	clearTables(t, "verifications", "users")
 	resetMailer()
 
@@ -499,21 +559,20 @@ func TestVerifySignupFails(t *testing.T) {
 
 	id := addSignup(t, name, email, password)
 
+	// unknown id
 	d1 := map[string]string{
 		"id":       "invalid",
 		"password": password,
 	}
-	d2 := map[string]string{
-		"id":       id,
-		"password": "invalid",
-	}
-
-	// unknown id
 	response := doPost(t, "/api/signups/verify", []byte(doMarshall(t, d1)), "")
 	checkResponseCode(t, response, http.StatusNotFound, "/api/signups/verify")
 	checkResponseBody(t, response, "", "/api/signups/verify")
 
 	// invalid password
+	d2 := map[string]string{
+		"id":       id,
+		"password": "invalid",
+	}
 	response = doPost(t, "/api/signups/verify", []byte(doMarshall(t, d2)), "")
 	checkResponseCode(t, response, http.StatusBadRequest, "/api/signups/verify")
 	checkResponseBody(t, response, "", "/api/signups/verify")
@@ -521,7 +580,7 @@ func TestVerifySignupFails(t *testing.T) {
 	assertSignups(t, 1)
 }
 
-func TestVerifySignupInvalidData(t *testing.T) {
+func TestSignupVerifyInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -530,6 +589,7 @@ func TestVerifySignupInvalidData(t *testing.T) {
 		{``, 400},
 		{`{`, 400},
 		{`{}`, 400},                           // no data
+		{`{"foo": 123}`, 400},                 // no data
 		{`{"password": "password1234"}`, 400}, // no id
 		{`{"id": "", "password": "password1234"}`, 400}, // empty id
 		{`{"id": "1234"}`, 400},                         // no password
@@ -538,8 +598,9 @@ func TestVerifySignupInvalidData(t *testing.T) {
 
 	for i, d := range data {
 		response := doPost(t, "/api/signups/verify", []byte(d.data), "")
-		checkResponseCode(t, response, d.code, fmt.Sprintf("/api/signups/verify#%d", i))
-		checkResponseBody(t, response, "", "/api/signups/verify")
+		tag := fmt.Sprintf("/api/signups/verify#%d", i)
+		checkResponseCode(t, response, d.code, tag)
+		checkResponseBody(t, response, "", tag)
 	}
 }
 
@@ -549,116 +610,29 @@ type tokenData struct {
 	Token string `json:"token" binding:"required"`
 }
 
-func TestSigninOk(t *testing.T) {
+func TestSignin(t *testing.T) {
 	clearTables(t, "verifications", "users", "sessions")
 
-	d1 := map[string]string{
-		"name":     "John Doe",
-		"email":    "johndoe@example.com",
-		"password": "password1234",
-	}
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
 
-	// create signup
-	response := doPost(t, "/api/signups", []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, "/api/signups")
-	checkResponseBody(t, response, "", "/api/signups")
-
-	assertSignups(t, 1)
-	id1, _, _, _ := getSignup(t)
-
-	d2 := map[string]string{
-		"ID":       id1,
-		"password": d1["password"],
-	}
-
-	// verify signup and check token
-	response = doPost(t, "/api/signups/verify", []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusOK, "/api/signups/verify")
-
-	assertSignups(t, 0)
-	assertUsers(t, 1)
-	assertSessions(t, 1)
-
-	var d tokenData
-	err := json.Unmarshal(response.Body.Bytes(), &d)
-	if err != nil {
-		t.Fatalf("failed to unmarshall token: %s", err)
-	}
+	addUser(t, name, email, password)
 
 	// check signin works
-	d3 := map[string]string{
-		"email":    d1["email"],
-		"password": d1["password"],
+	d1 := map[string]string{
+		"email":    email,
+		"password": password,
 	}
 
-	response = doPost(t, "/api/signin", []byte(doMarshall(t, d3)), "")
+	response := doPost(t, "/api/signin", []byte(doMarshall(t, d1)), "")
 	checkResponseCode(t, response, http.StatusOK, "/api/signin")
 
-	err = json.Unmarshal(response.Body.Bytes(), &d)
+	var d2 tokenData
+
+	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall response body: %s", err)
-	}
-}
-
-func TestSigninOverlapOk(t *testing.T) {
-	clearTables(t, "verifications", "users", "sessions")
-
-	d1 := map[string]string{
-		"name":     "John Doe",
-		"email":    "john@example.com",
-		"password": "password1234",
-	}
-	d2 := map[string]string{
-		"name":     "John Smith",
-		"email":    "john@example.com",
-		"password": "1234password",
-	}
-	unique := 1
-
-	// create signups
-	response := doPost(t, "/api/signups", []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, "/api/signups#1")
-	checkResponseBody(t, response, "", "/api/signups")
-
-	response = doPost(t, "/api/signups", []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusCreated, "/api/signups#2")
-	checkResponseBody(t, response, "", "/api/signups")
-
-	signups := getSignups(t)
-	if len(signups) != unique {
-		t.Fatalf("Number of signups. Got %d. Want %d.", len(signups), unique)
-	}
-
-	// verify second signup and check token
-	d3 := map[string]string{
-		"ID":       signups[0]["id"],
-		"password": d2["password"],
-	}
-
-	response = doPost(t, "/api/signups/verify", []byte(doMarshall(t, d3)), "")
-	checkResponseCode(t, response, http.StatusOK, "/api/signups/verify")
-
-	assertSignups(t, 0)
-	assertUsers(t, 1)
-	assertSessions(t, 1)
-
-	var d tokenData
-	err := json.Unmarshal(response.Body.Bytes(), &d)
-	if err != nil {
-		t.Fatalf("Unmarshall verify response body: %s", err)
-	}
-
-	d4 := map[string]string{
-		"email":    d2["email"],
-		"password": d2["password"],
-	}
-
-	response = doPost(t, "/api/signin", []byte(doMarshall(t, d4)), "")
-	checkResponseCode(t, response, http.StatusOK, "/api/signin")
-
-	err = json.Unmarshal(response.Body.Bytes(), &d)
-	if err != nil {
-		t.Fatalf("Unmarshall signin response body: %s", err)
 	}
 }
 
@@ -692,7 +666,7 @@ func TestSigninFails(t *testing.T) {
 	checkResponseBody(t, response, "", "/api/signin")
 }
 
-func TestSigninInvalidData(t *testing.T) {
+func TestSigninInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -715,40 +689,81 @@ func TestSigninInvalidData(t *testing.T) {
 	}
 }
 
-func TestResetPasswordOk(t *testing.T) {
+func TestSignupFlow(t *testing.T) {
 	clearTables(t, "verifications", "users", "sessions")
-	resetMailer()
 
+	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	addUser(t,
-		"John Doe",
-		email,
-		password)
-
+	// create signup
 	d1 := map[string]string{
-		"email": email,
+		"name":     name,
+		"email":    email,
+		"password": password,
+	}
+	response := doPost(t, "/api/signups", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusCreated, "/api/signups")
+	checkResponseBody(t, response, "", "/api/signups")
+
+	assertSignups(t, 1)
+
+	// id comes from email link
+	id, _, _, _ := getSignup(t)
+
+	// verify signup and check token
+	d2 := map[string]string{
+		"ID":       id,
+		"password": password,
+	}
+	response = doPost(t, "/api/signups/verify", []byte(doMarshall(t, d2)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/signups/verify")
+
+	assertSignups(t, 0)
+	assertUsers(t, 1)
+	assertSessions(t, 1)
+
+	var d tokenData
+	err := json.Unmarshal(response.Body.Bytes(), &d)
+	if err != nil {
+		t.Fatalf("failed to unmarshall token: %s", err)
 	}
 
+	// check signin works
+	d3 := map[string]string{
+		"email":    email,
+		"password": password,
+	}
+
+	response = doPost(t, "/api/signin", []byte(doMarshall(t, d3)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/signin")
+
+	err = json.Unmarshal(response.Body.Bytes(), &d)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall response body: %s", err)
+	}
+}
+
+func TestResetPassword(t *testing.T) {
+	clearTables(t, "verifications", "users", "sessions")
+	resetMailer()
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	addUser(t, name, email, password)
+
 	// request password reset
+	d1 := map[string]string{"email": email}
 	response := doPost(t, "/api/resetpw", []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, "/api/resetpw#1")
+	checkResponseCode(t, response, http.StatusCreated, "/api/resetpw")
 
 	id, email := getResetPassword(t)
 
 	q := resetMailer()
 	if len(q) != 1 || q[0].email != email || !strings.Contains(q[0].url, id) {
 		t.Fatalf("Unexpected mailer data. Got %s, %s. Want %s, %s", q[0].email, q[0].url, email, id)
-	}
-
-	// request another reset, merged with existing
-	response = doPost(t, "/api/resetpw", []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, "/api/resetpw#2")
-
-	r := getResetPasswords(t)
-	if len(r) != 1 {
-		t.Fatalf("Unexpected number of password reset requests. Got %d. Want 1.", len(r))
 	}
 }
 
@@ -757,7 +772,6 @@ func TestResetPasswordFails(t *testing.T) {
 	resetMailer()
 
 	email := "johndoe@example.com"
-	// password := "password1234"
 
 	d1 := map[string]string{
 		"email": email,
@@ -768,21 +782,9 @@ func TestResetPasswordFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusNotFound, "/api/resetpw")
 
 	assertPasswordResets(t, 0)
-
-	// addUser(t,
-	// 	"John Doe",
-	// 	email,
-	// 	password)
-
-	// id, email := getResetPassword(t)
-
-	// q := resetMailer()
-	// if len(q) != 1 || q[0].email != email || !strings.Contains(q[0].url, id) {
-	// 	t.Fatalf("Unexpected mailer data. Got %s, %s. Want %s, %s", q[0].email, q[0].url, email, id)
-	// }
 }
 
-func TestResetPasswordInvalidData(t *testing.T) {
+func TestResetPasswordInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -791,24 +793,281 @@ func TestResetPasswordInvalidData(t *testing.T) {
 		{``, 400},
 		{`{`, 400},
 		{`{}`, 400},                   // no email
+		{`{"foo": 123}`, 400},         // no email
 		{`{"email": ""}`, 400},        // empty email
 		{`{"email": "foo@bar"}`, 400}, // invalid email
 	}
 
 	for i, d := range data {
-		response := doPost(t, "/api/signups/check", []byte(d.data), "")
-		checkResponseCode(t, response, d.code, fmt.Sprintf("/api/signups/check#%d", i))
-		checkResponseBody(t, response, "", "/api/signups/check")
+		response := doPost(t, "/api/resetpw", []byte(d.data), "")
+		tag := fmt.Sprintf("/api/resetpw#%d", i)
+		checkResponseCode(t, response, d.code, tag)
+		checkResponseBody(t, response, "", tag)
 	}
 }
 
-func TestDeleteAccountOk(t *testing.T) {
+func TestVerifyResetPassword(t *testing.T) {
+	clearTables(t, "verifications", "users", "sessions")
+	resetMailer()
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	newPassword := "password9876"
+
+	addUser(t, name, email, password)
+	id := addResetPassword(t, email)
+
+	// verify password reset
+	d1 := map[string]string{
+		"id":       id,
+		"password": newPassword,
+	}
+	response := doPost(t, "/api/resetpw/verify", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/resetpw/verify")
+	checkResponseBody(t, response, "", "/api/resetpw/verify")
+
+	assertPasswordResets(t, 0)
+
+	// check password has changed
+	_, _, passwordHash := getUser(t, email)
+
+	err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(newPassword))
+	if err != nil {
+		t.Fatalf("Unexpected password")
+	}
+}
+
+func TestVerifyResetPasswordFails(t *testing.T) {
+	clearTables(t, "verifications", "users")
+	resetMailer()
+
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	id := addResetPassword(t, email)
+
+	// unknown id
+	d1 := map[string]string{
+		"id":       "invalid",
+		"password": password,
+	}
+	response := doPost(t, "/api/resetpw/verify", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusNotFound, "/api/resetpw/verify#1")
+	checkResponseBody(t, response, "", "/api/resetpw/verify#1")
+
+	assertPasswordResets(t, 1)
+
+	// user gone
+	d2 := map[string]string{
+		"id":       id,
+		"password": password,
+	}
+	response = doPost(t, "/api/resetpw/verify", []byte(doMarshall(t, d2)), "")
+	checkResponseCode(t, response, http.StatusGone, "/api/resetpw/verify#2")
+	checkResponseBody(t, response, "", "/api/resetpw/verify#2")
+
+	assertPasswordResets(t, 0)
+}
+
+func TestVerifyResetPasswordInvalid(t *testing.T) {
+	type testData struct {
+		data string
+		code int
+	}
+	var data = [...]testData{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},                           // no data
+		{`{"foo": 123}`, 400},                 // no data
+		{`{"password": "password1234"}`, 400}, // no id
+		{`{"id": "", "password": "password1234"}`, 400}, // empty id
+		{`{"id": "1234"}`, 400},                         // no password
+		{`{"id": "1234", "password": ""}`, 400},         // empty password
+	}
+
+	for i, d := range data {
+		response := doPost(t, "/api/resetpw/verify", []byte(d.data), "")
+		tag := fmt.Sprintf("/api/resetpw/verify#%d", i)
+		checkResponseCode(t, response, d.code, tag)
+		checkResponseBody(t, response, "", tag)
+	}
+}
+
+func TestResetPasswordFlow(t *testing.T) {
+	clearTables(t, "verifications", "users", "sessions")
+	resetMailer()
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	newPassword := "password9876"
+
+	addUser(t, name, email, password)
+
+	// request password reset
+	d1 := map[string]string{"email": email}
+	response := doPost(t, "/api/resetpw", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusCreated, "/api/resetpw")
+
+	id, email := getResetPassword(t)
+
+	// verify password reset
+	d2 := map[string]string{
+		"id":       id,
+		"password": newPassword,
+	}
+	response = doPost(t, "/api/resetpw/verify", []byte(doMarshall(t, d2)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/resetpw/verify")
+	checkResponseBody(t, response, "", "/api/resetpw/verify")
+
+	// check signin works with new password
+	d3 := map[string]string{
+		"email":    email,
+		"password": newPassword,
+	}
+	response = doPost(t, "/api/signin", []byte(doMarshall(t, d3)), "")
+	checkResponseCode(t, response, http.StatusOK, "/api/signin")
+
+	var d4 tokenData
+	err := json.Unmarshal(response.Body.Bytes(), &d4)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall response body: %s", err)
+	}
+}
+
+func TestModifyAccount(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	originalName := "John Doe"
+	email := "johndoe@example.com"
+	originalPassword := "password1234"
+
+	_, session := addUserSession(t,
+		originalName,
+		email,
+		originalPassword)
+
+	newName := "John Smith"
+	newPassword := "password9876"
+
+	// modify name
+	d1 := map[string]string{
+		"name": newName,
+	}
+	response := doPatch(t, "/api/auth/account", []byte(doMarshall(t, d1)), session)
+	checkResponseCode(t, response, http.StatusOK, "/api/auth/account")
+
+	_, name, _ := getUser(t, email)
+	if name != newName {
+		t.Fatalf("Unexpected name. Got %s. Want %s", name, newName)
+	}
+
+	// modify password
+	d2 := map[string]string{
+		"password": newPassword,
+	}
+	response = doPatch(t, "/api/auth/account", []byte(doMarshall(t, d2)), session)
+	checkResponseCode(t, response, http.StatusOK, "/api/auth/account")
+
+	_, _, passwordHash := getUser(t, email)
+	err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(newPassword))
+	if err != nil {
+		t.Fatalf("Unexpected password.")
+	}
+
+	// modify name and password
+	d3 := map[string]string{
+		"name":     originalName,
+		"password": originalPassword,
+	}
+	response = doPatch(t, "/api/auth/account", []byte(doMarshall(t, d3)), session)
+	checkResponseCode(t, response, http.StatusOK, "/api/auth/account")
+
+	_, name, passwordHash = getUser(t, email)
+	if name != originalName {
+		t.Fatalf("Unexpected name. Got %s. Want %s", name, originalName)
+	}
+	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(originalPassword))
+	if err != nil {
+		t.Fatalf("Unexpected password.")
+	}
+}
+
+func TestModifyAccountFails(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user, session := addUserSession(t,
+		name,
+		email,
+		password)
+
+	// no session
+	d1 := map[string]string{
+		"name": "John Smith",
+	}
+	response := doPatch(t, "/api/auth/account", []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusUnauthorized, "/api/auth/account")
+
+	_, name2, _ := getUser(t, email)
+	if name2 != name {
+		t.Fatalf("Account modified without session")
+	}
+
+	// ensure email does not change
+	d2 := map[string]string{
+		"email": "johnsmith@example.com",
+	}
+	response = doPatch(t, "/api/auth/account", []byte(doMarshall(t, d2)), session)
+	checkResponseCode(t, response, http.StatusBadRequest, "/api/auth/account")
+
+	id, _, _ := getUser(t, email)
+	if id != user {
+		t.Fatal()
+	}
+}
+
+func TestModifyAccountInvalid(t *testing.T) {
+	clearTables(t, "users", "sessions")
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	_, session := addUserSession(t,
+		name,
+		email,
+		password)
+
+	type testData struct {
+		data string
+		code int
+	}
+	var data = [...]testData{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},           // no data
+		{`{"foo": 123}`, 400}, // no data
+	}
+
+	for i, d := range data {
+		response := doPatch(t, "/api/auth/account", []byte(d.data), session)
+		tag := fmt.Sprintf("/api/auth/account#%d", i)
+		checkResponseCode(t, response, d.code, tag)
+		checkResponseBody(t, response, "", tag)
+	}
+}
+
+func TestDeleteAccount(t *testing.T) {
 	clearTables(t, "users", "sessions")
 
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserWithSession(t,
+	_, session := addUserSession(t,
 		"John Doe",
 		email,
 		password)
@@ -830,7 +1089,7 @@ func TestDeleteAccountFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserWithSession(t,
+	_, session := addUserSession(t,
 		"John Doe",
 		email,
 		password)
@@ -851,6 +1110,36 @@ func TestDeleteAccountFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusBadRequest, "/api/auth/account#3")
 
 	getUser(t, email)
+}
+
+func TestDeleteAccountInvalid(t *testing.T) {
+	clearTables(t, "users", "sessions")
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	_, session := addUserSession(t,
+		name,
+		email,
+		password)
+
+	type testData struct {
+		data string
+		code int
+	}
+	var data = [...]testData{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},           // no data
+		{`{"foo": 123}`, 400}, // no data
+	}
+
+	for i, d := range data {
+		response := doDelete(t, "/api/auth/account", []byte(d.data), session)
+		tag := fmt.Sprintf("/api/auth/account#%d", i)
+		checkResponseCode(t, response, d.code, tag)
+		checkResponseBody(t, response, "", tag)
+	}
 }
 
 // func TestTag(t *testing.T) {
