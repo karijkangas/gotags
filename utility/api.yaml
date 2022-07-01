@@ -16,69 +16,77 @@ produces:
 consumes:
   - application/json
 paths:
-  /signups/check:
+  /join/check:
     post:
       description: |
         Check account availability. Account is available if there is no existing user registered
         with a given email address.
       parameters:
-        - description: Signup check data
+        - description: Join check data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/SignupsCheck"
+            $ref: "#/definitions/JoinCheck"
       produces:
         - application/json
       responses:
         "200":
           description: Account available
+          schema:
+            $ref: "#/definitions/JoinCheck"
         "400":
           description: Invalid data
         "409":
           description: Account not available
-  /signups/:
+  /join/:
     post:
       description: |
-        Create a signup request. Sends an email with a signup verification link.
+        Create a join request. Sends an email with a link to verify account. Join requests are
+        purged from the database after 1 day.
       parameters:
-        - description: Signup data
+        - description: Join data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Signup"
+            $ref: "#/definitions/Join"
       produces:
         - application/json
       responses:
-        "200":
-          description: Signup request accepted
+        "201":
+          description: Join request accepted
         "400":
           description: Invalid data
         "409":
           description: Account not available
-  /signups/verify:
+  /join/verify:
     post:
       description: |
-        Verify signup request. Creates a user account matching the signup request data and
-        removes the request. Given password must match the password in the signup request data.
-        Returns a session token.
+        Verify pending join request. Creates a user account matching the pending join request
+        data and removes the pending join request from the database. Given email and password
+        must match the email and password in the pending join request data. Returns a session
+        token.
       parameters:
-        - description: Signup verify data
+        - description: Join verify data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/VerifySignup"
+            $ref: "#/definitions/JoinVerify"
       produces:
         - application/json
       responses:
         "200":
-          description: Token
+          description: Join token data
           schema:
-            $ref: "#/definitions/Token"
+            $ref: "#/definitions/JoinToken"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid credentials
         "404":
-          description: Invalid signup request
+          description: Join request not found
   /signin/:
     post:
       description: |
@@ -99,10 +107,13 @@ paths:
             $ref: "#/definitions/Token"
         "400":
           description: Invalid data
-  /resetpw/:
+        "401":
+          description: Invalid credentials
+  /reset-password/:
     post:
       description: |
-        Create a reset password request. Sends an email with a verification link.
+        Create a reset password request. Sends an email with a link to reset password. Reset password
+        requests are purged from the database after 1 day.
       parameters:
         - description: Reset password data
           in: body
@@ -115,23 +126,23 @@ paths:
       responses:
         "201":
           description: Reset password request accepted
-          schema:
-            $ref: "#/definitions/Token"
         "400":
           description: Invalid data
         "404":
           description: Unknown email
-  /resetpw/verify:
+  /reset-password/verify:
     post:
       description: |
-        Reset password and remove the request.
+        Resets password and removes the reset password request from the database. Given email
+        must match the email in the pending reset password request data. Returns a session
+        token.
       parameters:
         - description: Reset password verify data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/VerifyResetPassword"
+            $ref: "#/definitions/ResetPasswordVerify"
       produces:
         - application/json
       responses:
@@ -139,8 +150,10 @@ paths:
           description: Token.
           schema:
             $ref: "#/definitions/Token"
+        "401":
+          description: Given email does not match the email in the request
         "404":
-          description: Invalid password reset request
+          description: Password reset request not found
         "410":
           description: User matching email not found
   /auth/account/:
@@ -183,34 +196,41 @@ paths:
         "401":
           description: Invalid token
 definitions:
-  SignupsCheck:
+  JoinCheck:
     properties:
       email:
         type: string
     required:
       - email
     type: object
-  Signup:
+  Join:
     properties:
-      email:
-        type: string
       name:
+        type: string
+      email:
         type: string
       password:
         type: string
+      lang:
+        type: string
+      extra:
+        type: object
     required:
       - name
       - email
       - password
     type: object
-  VerifySignup:
+  JoinVerify:
     properties:
       id:
+        type: string
+      email:
         type: string
       password:
         type: string
     required:
       - id
+      - email
       - password
     type: object
   Signin:
@@ -223,8 +243,23 @@ definitions:
       - email
       - password
     type: object
+  JoinToken:
+    properties:
+      name:
+        type: string
+      email:
+        type: string
+      extra:
+        type: string
+      token:
+        type: string
+    type: object
   Token:
     properties:
+      name:
+        type: string
+      email:
+        type: string
       token:
         type: string
     type: object
@@ -232,17 +267,22 @@ definitions:
     properties:
       email:
         type: string
+      lang:
+        type: string
     required:
       - email
     type: object
-  VerifyResetPassword:
+  ResetPasswordVerify:
     properties:
       id:
+        type: string
+      email:
         type: string
       password:
         type: string
     required:
       - id
+      - email
       - password
     type: object
   ModifyAccount:

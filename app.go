@@ -22,11 +22,38 @@ const (
 	verificationsTTL = "'1 day'"
 )
 
-type mailer func(email, url string) error
+type mailer func(email, url, lang string) error
 
-func sasMailer(email, url string) error {
-	fmt.Printf("********** sas mailer: %s %s\n", email, url)
+func sasMailer(email, url, lang string) error {
+	fmt.Printf("********** sas mailer: %s %s %s\n", email, url, lang)
 	return nil
+}
+
+// func supportedLang(lang string) string {
+// 	var supported = map[string]string{
+// 		"en": "en",
+// 		"fi": "fi",
+// 	}
+// 	s, ok := supported[lang]
+// 	if !ok {
+// 		return "en"
+// 	}
+// 	return s
+// }
+
+var paths = map[string]string{
+	"signin":              "/api/signin",
+	"join":                "/api/join",
+	"joinCheck":           "/api/join/check",
+	"joinVerify":          "/api/join/verify",
+	"resetPassword":       "/api/reset-password",
+	"resetPasswordVerify": "/api/reset-password/verify",
+	// "auth": "/api/auth",
+	// "auth+account": "/account",
+	// "auth+tags": "/tags/:id",
+	"auth":         "",
+	"auth+account": "/api/auth/account",
+	"auth+tags":    "/api/auth/tags/:id",
 }
 
 // GoTags ...
@@ -66,19 +93,19 @@ func (a *GoTags) initialize(databaseURL string) {
 
 	router := gin.Default()
 
-	router.POST("/api/signups/check", a.checkSignup)
-	router.POST("/api/signups", a.signup)
-	router.POST("/api/signups/verify", a.verifySignup)
-	router.POST("/api/signin", a.signin)
-	router.POST("/api/resetpw", a.resetPassword)
-	router.POST("/api/resetpw/verify", a.verifyResetPassword)
+	router.POST(paths["signin"], a.signin)
+	router.POST(paths["join"], a.join)
+	router.POST(paths["joinCheck"], a.joinCheck)
+	router.POST(paths["joinVerify"], a.joinVerify)
+	router.POST(paths["resetPassword"], a.resetPassword)
+	router.POST(paths["resetPasswordVerify"], a.resetPasswordVerify)
 
-	authorized := router.Group("/api/auth")
+	authorized := router.Group(paths["auth"])
 	authorized.Use(a.auth())
 	{
-		authorized.PATCH("/account", a.modifyAccount)
-		authorized.DELETE("/account", a.deleteAccount)
-		authorized.GET("/tags/:id", a.tag)
+		authorized.PATCH(paths["auth+account"], a.modifyAccount)
+		authorized.DELETE(paths["auth+account"], a.deleteAccount)
+		authorized.GET(paths["auth+tags"], a.tag)
 	}
 
 	a.pool = pool
@@ -97,45 +124,65 @@ func (a *GoTags) run(server string) {
 func (a *GoTags) cleanupDB() {
 	log.Printf("Running database cleanup")
 	a.pool.Exec(context.Background(),
-		fmt.Sprintf(`DELETE FROM verifications WHERE created_at < now() - interval %s;`, verificationsTTL))
+		fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval %s;`, verificationsTTL))
 }
 
 //
-func (a *GoTags) checkSignup(c *gin.Context) {
+func (a *GoTags) signin(c *gin.Context) {
 	var d struct {
-		Email string `json:"email" binding:"required,email"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	email := d.Email
+	password := d.Password
 
-	// check if email already used by registered user
-	var exists bool
+	// get user id and password_hash
+	var user int
+	var name, passwordHash string
 	row := a.pool.QueryRow(
 		context.Background(),
-		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1);`,
+		`SELECT id, name, password_hash FROM users WHERE email = $1;`,
 		email)
-	err := row.Scan(&exists)
+	err1 := row.Scan(&user, &name, &passwordHash)
+
+	// validate password
+	err2 := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
+
+	// missing user or invalid email
+	if err1 != nil || err2 != nil {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	// create a session
+	var token string
+	row = a.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO sessions (user_id)
+			VALUES ($1)
+			RETURNING id;`,
+		user)
+	err := row.Scan(&token)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	if exists {
-		c.Status(http.StatusConflict)
-		return
-	}
-	c.Status(http.StatusOK)
+	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "token": token})
 }
 
 //
-func (a *GoTags) signup(c *gin.Context) {
+func (a *GoTags) join(c *gin.Context) {
 	var d struct {
-		Name     string `json:"name" binding:"required,min=1"`
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
+		Name     string         `json:"name" binding:"required,min=1"`
+		Email    string         `json:"email" binding:"required,email"`
+		Password string         `json:"password" binding:"required,min=1"`
+		Lang     string         `json:"lang"`
+		Extra    map[string]any `json:"extra"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -144,8 +191,10 @@ func (a *GoTags) signup(c *gin.Context) {
 	name := d.Name
 	email := d.Email
 	password := d.Password
+	extra := d.Extra
+	lang := d.Lang
 
-	// check if email already registered
+	// check if email available
 	var exists bool
 	row := a.pool.QueryRow(
 		context.Background(),
@@ -161,22 +210,23 @@ func (a *GoTags) signup(c *gin.Context) {
 		return
 	}
 
-	// add signup data to verifications
+	// add join to pending
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
-	data := map[string]string{
+	data := map[string]any{
 		"name":          name,
 		"password_hash": string(passwordHash),
+		"extra":         extra,
 	}
 	var uuid string
 	row = a.pool.QueryRow(
 		context.Background(),
-		`INSERT INTO verifications (email, category, data)
-			VALUES ($1, 'signup', $2)
+		`INSERT INTO pending (email, category, data)
+			VALUES ($1, 'join', $2)
 			RETURNING id;`,
 		email, data)
 	err = row.Scan(&uuid)
@@ -185,8 +235,8 @@ func (a *GoTags) signup(c *gin.Context) {
 		return
 	}
 
-	// create verify signup url
-	req, err := http.NewRequest("GET", "/signup/verify", nil)
+	// create join verify url
+	req, err := http.NewRequest("GET", paths["joinVerify"], nil)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -196,8 +246,8 @@ func (a *GoTags) signup(c *gin.Context) {
 	q.Add("id", uuid)
 	req.URL.RawQuery = q.Encode()
 
-	// send email with a link to verify signup
-	err = a.mailer(email, req.URL.String())
+	// send message with a link
+	err = a.mailer(email, req.URL.String(), lang)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -207,9 +257,39 @@ func (a *GoTags) signup(c *gin.Context) {
 }
 
 //
-func (a *GoTags) verifySignup(c *gin.Context) {
+func (a *GoTags) joinCheck(c *gin.Context) {
+	var d struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	email := d.Email
+
+	// check email available
+	var exists bool
+	row := a.pool.QueryRow(
+		context.Background(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1);`,
+		email)
+	err := row.Scan(&exists)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	if exists {
+		c.Status(http.StatusConflict)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"email": email})
+}
+
+//
+func (a *GoTags) joinVerify(c *gin.Context) {
 	var d struct {
 		ID       string `json:"id" binding:"required"`
+		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.BindJSON(&d); err != nil {
@@ -219,12 +299,12 @@ func (a *GoTags) verifySignup(c *gin.Context) {
 	id := d.ID
 	password := d.Password
 
-	// find matching signup verification
+	// get matching pending join
 	var email string
-	data := map[string]string{}
+	data := map[string]any{}
 	row := a.pool.QueryRow(
 		context.Background(),
-		`SELECT email, data FROM verifications WHERE category = 'signup' AND id = $1;`,
+		`SELECT email, data FROM pending WHERE category = 'join' AND id = $1;`,
 		id)
 	err := row.Scan(&email, &data)
 	if err != nil {
@@ -232,14 +312,15 @@ func (a *GoTags) verifySignup(c *gin.Context) {
 		return
 	}
 
-	// validate password
-	name := data["name"]
-	passwordHash := data["password_hash"]
+	// validate email and password
+	name := (data["name"]).(string)
+	passwordHash := (data["password_hash"]).(string)
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
-	if err != nil {
-		c.Status(http.StatusBadRequest)
+	if email != d.Email || err != nil {
+		c.Status(http.StatusUnauthorized)
 		return
 	}
+	extra := data["extra"]
 
 	// add user
 	var user int
@@ -257,10 +338,10 @@ func (a *GoTags) verifySignup(c *gin.Context) {
 		return
 	}
 
-	// remove signup and create a session
+	// remove pending join and create a session
 	var token string
 	b := &pgx.Batch{}
-	b.Queue(`DELETE FROM verifications WHERE email = $1 AND category = 'signup';`, email)
+	b.Queue(`DELETE FROM pending WHERE email = $1 AND category = 'join';`, email)
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
 	r := a.pool.SendBatch(context.Background(), b)
 	defer r.Close()
@@ -274,43 +355,125 @@ func (a *GoTags) verifySignup(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "token": token})
+	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "extra": extra, "token": token})
 }
 
 //
-func (a *GoTags) signin(c *gin.Context) {
+func (a *GoTags) resetPassword(c *gin.Context) {
 	var d struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required"`
+		Email string `json:"email" binding:"required,email"`
+		Lang  string `json:"lang"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	email := d.Email
-	password := d.Password
+	lang := d.Lang
 
-	// find user id and password_hash
+	// find user with matching email
 	var user int
-	var name, passwordHash string
 	row := a.pool.QueryRow(
 		context.Background(),
-		`SELECT id, name, password_hash FROM users WHERE email = $1;`,
+		`SELECT id FROM users WHERE email = $1;`,
 		email)
-	err := row.Scan(&user, &name, &passwordHash)
+	err := row.Scan(&user)
 	if err != nil {
-		c.Status(http.StatusBadRequest)
+		c.Status(http.StatusNotFound)
 		return
 	}
 
-	// validate password
-	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
+	// add pending reset password data
+	var uuid string
+	row = a.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO pending (email, category)
+			VALUES ($1, 'reset_password')
+			RETURNING id;`,
+		email)
+	err = row.Scan(&uuid)
 	if err != nil {
-		c.Status(http.StatusBadRequest)
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	// create a session and return token
+	// create reset password url
+	req, err := http.NewRequest("GET", paths["resetPasswordVerify"], nil)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	q := url.Values{}
+	q.Add("id", uuid)
+	req.URL.RawQuery = q.Encode()
+
+	// send message with a link to complete password reset
+	err = a.mailer(email, req.URL.String(), lang)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.Status(http.StatusCreated)
+}
+
+//
+func (a *GoTags) resetPasswordVerify(c *gin.Context) {
+	var d struct {
+		ID       string `json:"id" binding:"required"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=1"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	id := d.ID
+	password := d.Password
+
+	// find matching pending password reset
+	var email string
+	row := a.pool.QueryRow(
+		context.Background(),
+		`SELECT email FROM pending WHERE category = 'reset_password' AND id = $1;`,
+		id)
+	err := row.Scan(&email)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if email != d.Email {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	// generate password hash
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// delete request and update user password
+	b := &pgx.Batch{}
+	b.Queue(`DELETE FROM pending WHERE category = 'reset_password' AND id = $1;`, id)
+	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, name;`, passwordHash, email)
+	r := a.pool.SendBatch(context.Background(), b)
+	defer r.Close()
+
+	r.Exec()           // delete, ignore errors
+	row = r.QueryRow() // update, check user gone
+	var user int
+	var name string
+
+	err = row.Scan(&user, &name)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+
+	// create a session
 	var token string
 	row = a.pool.QueryRow(
 		context.Background(),
@@ -326,115 +489,6 @@ func (a *GoTags) signin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "token": token})
-}
-
-//
-func (a *GoTags) resetPassword(c *gin.Context) {
-	var d struct {
-		Email string `json:"email" binding:"required,email"`
-	}
-	if err := c.BindJSON(&d); err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
-	email := d.Email
-
-	// find user with matching email
-	var user int
-	row := a.pool.QueryRow(
-		context.Background(),
-		`SELECT id FROM users WHERE email = $1;`,
-		email)
-	err := row.Scan(&user)
-	if err != nil {
-		c.Status(http.StatusNotFound)
-		return
-	}
-
-	// add reset password to verifications
-	var uuid string
-	row = a.pool.QueryRow(
-		context.Background(),
-		`INSERT INTO verifications (email, category)
-			VALUES ($1, 'reset_password')
-			RETURNING id;`,
-		email)
-	err = row.Scan(&uuid)
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-
-	// create reset password url
-	req, err := http.NewRequest("GET", "/resetpw/verify", nil)
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-
-	q := url.Values{}
-	q.Add("id", uuid)
-	req.URL.RawQuery = q.Encode()
-
-	// send message with a link to complete password reset
-	err = a.mailer(email, req.URL.String())
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-
-	c.Status(http.StatusCreated)
-}
-
-//
-func (a *GoTags) verifyResetPassword(c *gin.Context) {
-	var d struct {
-		ID       string `json:"id" binding:"required"`
-		Password string `json:"password" binding:"required,min=1"`
-	}
-	if err := c.BindJSON(&d); err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
-	id := d.ID
-	password := d.Password
-
-	// find matching signup verification
-	var email string
-	row := a.pool.QueryRow(
-		context.Background(),
-		`SELECT email FROM verifications WHERE category = 'reset_password' AND id = $1;`,
-		id)
-	err := row.Scan(&email)
-	if err != nil {
-		c.Status(http.StatusNotFound)
-		return
-	}
-
-	//
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
-	if err != nil {
-		c.Status(http.StatusBadRequest)
-		return
-	}
-
-	//
-	b := &pgx.Batch{}
-	b.Queue(`DELETE FROM verifications WHERE email = $1 AND category = 'reset_password';`, email)
-	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id;`, passwordHash, email)
-	r := a.pool.SendBatch(context.Background(), b)
-	defer r.Close()
-
-	r.Exec()           // delete, ignore errors
-	row = r.QueryRow() // update, check user gone
-	var user int
-	err = row.Scan(&user)
-	if err != nil {
-		c.Status(http.StatusGone)
-		return
-	}
-
-	c.Status(http.StatusOK)
 }
 
 //
@@ -523,7 +577,7 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 		return
 	}
 
-	c.Status(http.StatusOK)
+	c.Status(http.StatusNoContent)
 }
 
 //
