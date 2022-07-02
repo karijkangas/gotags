@@ -100,5 +100,5 @@ go build
 
 ```shell
 docker buildx build --platform linux/arm64/v8 --tag swagger-ui:v1 --tag swagger-ui:latest .
-docker run -p 8080:8080 -v /Users/kari/vm-share-gotags/gotags/utility/api.yaml:/app/swagger.yaml -e SWAGGER_JSON=/app/swagger.yaml swagger-ui:v1
+docker run -p 8080:8080 -v /Users/gotags/vm-share-gotags/gotags/utility/api.yaml:/app/swagger.yaml -e SWAGGER_JSON=/app/swagger.yaml swagger-ui:v1
 ```
