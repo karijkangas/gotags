@@ -1,0 +1,35 @@
+#!/bin/bash
+
+ISO_IMAGE=../debian-11.1.0-arm64-netinst.iso 
+DISK_FILE=debian-11.qcow2
+DISK_SIZE=40G
+CORE_COUNT=4
+MEMORY_SIZE=4G
+
+EFI_FIRM="$(dirname $(which qemu-img))/../share/qemu/edk2-aarch64-code.fd"
+OVMF_VARS=debian-11_ovmf_vars.fd
+
+dd if=/dev/zero conv=sync bs=1M count=64 of=$OVMF_VARS
+
+qemu-img create -f qcow2 $DISK_FILE $DISK_SIZE
+
+echo "starting"
+
+qemu-system-aarch64 \
+  -machine virt,accel=hvf,highmem=off \
+  -cpu cortex-a72 -smp $CORE_COUNT -m $MEMORY_SIZE \
+  -device qemu-xhci,id=usb-bus \
+  -device usb-tablet,bus=usb-bus.0 \
+  -device usb-mouse,bus=usb-bus.0 \
+  -device usb-kbd,bus=usb-bus.0 \
+  -device virtio-gpu-pci \
+  -display default,show-cursor=on \
+  -nic user,model=virtio \
+  -drive format=raw,file=$EFI_FIRM,if=pflash,readonly=on \
+  -drive format=raw,file=$OVMF_VARS,if=pflash \
+  -device nvme,drive=drive0,serial=drive0,bootindex=0 \
+  -drive if=none,media=disk,id=drive0,format=qcow2,file=$DISK_FILE \
+  -boot d \
+  -device usb-storage,drive=drive2,removable=true,bootindex=2 \
+  -drive if=none,media=cdrom,id=drive2,file=$ISO_IMAGE \
+  -nographic \
