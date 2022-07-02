@@ -4,8 +4,9 @@ gotagsavaruus.com
 
 #
 
-Code starts from [a link](https://github.com/karijkangas/gotags/blob/main/main.go)
-Action from [a link](https://github.com/karijkangas/gotags/blob/main/app.go)
+Code starts from [main.go](https://github.com/karijkangas/gotags/blob/main/main.go)
+
+Action from [app.go](https://github.com/karijkangas/gotags/blob/main/app.go)
 
 main_test.go tests main.go.
 
