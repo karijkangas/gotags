@@ -12,9 +12,7 @@ Action from [app.go](https://github.com/karijkangas/gotags/blob/main/app.go)
 
 main_test.go tests main.go.
 
-env.json
-
-environment variables:
+env.json environment variables:
 
 - database, server, domain
 
