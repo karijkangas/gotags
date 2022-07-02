@@ -4,6 +4,8 @@ gotagsavaruus.com
 
 #
 
+Development done in main, otherwise not yet done.
+
 Code starts from [main.go](https://github.com/karijkangas/gotags/blob/main/main.go)
 
 Action from [app.go](https://github.com/karijkangas/gotags/blob/main/app.go)
