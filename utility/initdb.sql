@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS pending (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   email TEXT NOT NULL,
   category pending_category,
-  data JSONB not null default '{}'::jsonb
+  data JSONB not null default '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE default current_timestamp,
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
 );
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS profiles (
   id INTEGER REFERENCES users PRIMARY KEY,
-  data JSONB not null default '{}'::jsonb
+  data JSONB not null default '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE default current_timestamp,
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
 );

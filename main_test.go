@@ -121,7 +121,7 @@ func checkResponseBody(t *testing.T, r *httptest.ResponseRecorder, want string, 
 	}
 }
 
-func getPending(t *testing.T, category string) (id, email string, data map[string]any) {
+func getOnePending(t *testing.T, category string) (id, email string, data map[string]any) {
 	c := context.Background()
 	row := app.pool.QueryRow(c,
 		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s';`, category))
@@ -132,20 +132,20 @@ func getPending(t *testing.T, category string) (id, email string, data map[strin
 	return
 }
 
-func getPendingJoin(t *testing.T) (id, name, email, passwordHash string, extra map[string]any) {
-	id, email, data := getPending(t, "join")
+func getOnePendingJoin(t *testing.T) (id, name, email, passwordHash string, extra map[string]any) {
+	id, email, data := getOnePending(t, "join")
 	name = data["name"].(string)
 	passwordHash = data["password_hash"].(string)
 	extra = data["extra"].(map[string]any)
 	return id, name, email, passwordHash, extra
 }
 
-func getPendingResetPassword(t *testing.T) (id, email string) {
-	id, email, _ = getPending(t, "reset_password")
+func getOnePendingResetPassword(t *testing.T) (id, email string) {
+	id, email, _ = getOnePending(t, "reset_password")
 	return id, email
 }
 
-func getAllPending(t *testing.T, category string) (result []map[string]any) {
+func getPending(t *testing.T, category string) (result []map[string]any) {
 	c := context.Background()
 	rows, err := app.pool.Query(c,
 		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s' ORDER BY created_at ASC;`, category))
@@ -173,14 +173,14 @@ func getAllPending(t *testing.T, category string) (result []map[string]any) {
 }
 
 func getPendingJoins(t *testing.T) (result []map[string]any) {
-	return getAllPending(t, "join")
+	return getPending(t, "join")
 }
 
-func getPendingResetPasswords(t *testing.T) (result []map[string]any) {
-	return getAllPending(t, "reset_password")
+func getPendingPasswordResets(t *testing.T) (result []map[string]any) {
+	return getPending(t, "reset_password")
 }
 
-func assertPending(t *testing.T, category string, want int) {
+func assertPendingCount(t *testing.T, category string, want int) {
 	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(c,
@@ -193,11 +193,11 @@ func assertPending(t *testing.T, category string, want int) {
 	}
 }
 
-func assertPendingJoins(t *testing.T, want int) {
-	assertPending(t, "join", want)
+func assertPendingJoinCount(t *testing.T, want int) {
+	assertPendingCount(t, "join", want)
 }
-func assertPendingPasswordResets(t *testing.T, want int) {
-	assertPending(t, "reset_password", want)
+func assertPendingResetPasswordCount(t *testing.T, want int) {
+	assertPendingCount(t, "reset_password", want)
 }
 
 func addUser(t *testing.T, name, email, password string) int {
@@ -216,7 +216,7 @@ func addUser(t *testing.T, name, email, password string) int {
 	return id
 }
 
-func assertUsers(t *testing.T, want int) {
+func assertUserCount(t *testing.T, want int) {
 	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(
@@ -241,13 +241,13 @@ func addSession(t *testing.T, user int) string {
 	return id
 }
 
-func addUserSession(t *testing.T, name, email, password string) (user int, session string) {
+func addUserWithSession(t *testing.T, name, email, password string) (user int, session string) {
 	user = addUser(t, name, email, password)
 	session = addSession(t, user)
 	return
 }
 
-func addUserProfile(t *testing.T, user int, data map[string]any) {
+func addProfile(t *testing.T, user int, data map[string]any) {
 	c := context.Background()
 	_, err := app.pool.Exec(c,
 		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
@@ -256,7 +256,7 @@ func addUserProfile(t *testing.T, user int, data map[string]any) {
 	}
 }
 
-func setUserProfile(t *testing.T, user int, data map[string]any) {
+func setProfile(t *testing.T, user int, data map[string]any) {
 	c := context.Background()
 	_, err := app.pool.Exec(c,
 		`UPDATE profiles SET id = $1, data = $2 WHERE id = $1;`, user, data)
@@ -298,7 +298,7 @@ func addPendingResetPassword(t *testing.T, email string) string {
 	return id
 }
 
-func assertSessions(t *testing.T, want int) {
+func assertSessionCount(t *testing.T, want int) {
 	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(
@@ -323,6 +323,38 @@ func getUser(t *testing.T, email string) (id int, name, passwordHash string) {
 }
 
 // ******************************************************************
+type signinToken struct {
+	Name  string `json:"name" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
+	Token string `json:"token" binding:"required"`
+}
+
+type joinCheckToken struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type joinActivateToken struct {
+	Name  string         `json:"name" binding:"required"`
+	Email string         `json:"email" binding:"required,email"`
+	Extra map[string]any `json:"extra"`
+	Token string         `json:"token" binding:"required"`
+}
+
+type newPasswordToken struct {
+	Name  string `json:"name" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
+	Token string `json:"token" binding:"required"`
+}
+
+type accountToken struct {
+	Name string `json:"name" binding:"required"`
+}
+
+type profileToken struct {
+	Data map[string]any `json:"data" binding:"required"`
+}
+
+// ******************************************************************
 func TestMain(m *testing.M) {
 	app.initialize(databaseURL, true)
 
@@ -337,37 +369,6 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 	os.Exit(code)
-}
-
-type joinCheckData struct {
-	Email string `json:"email" binding:"required,email"`
-}
-
-type signinToken struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required,email"`
-	Token string `json:"token" binding:"required"`
-}
-
-type joinVerifyToken struct {
-	Name  string         `json:"name" binding:"required"`
-	Email string         `json:"email" binding:"required,email"`
-	Extra map[string]any `json:"extra"`
-	Token string         `json:"token" binding:"required"`
-}
-
-type resetPasswordToken struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required,email"`
-	Token string `json:"token" binding:"required"`
-}
-
-type accountToken struct {
-	Name string `json:"name" binding:"required"`
-}
-
-type profileToken struct {
-	Data map[string]any `json:"data" binding:"required"`
 }
 
 // ******************************************************************
@@ -420,13 +421,13 @@ func TestSigninFails(t *testing.T) {
 	p := paths["signin"]
 	// invalid email
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+	checkResponseBody(t, response, "", "#1")
 
 	// invalid password
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
-	checkResponseBody(t, response, "", p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#2")
+	checkResponseBody(t, response, "", "#3")
 }
 
 func TestSigninInvalid(t *testing.T) {
@@ -450,7 +451,7 @@ func TestSigninInvalid(t *testing.T) {
 	p := paths["signin"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -477,10 +478,10 @@ func TestJoin(t *testing.T) {
 
 	p := paths["join"]
 	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusCreated, p)
-	checkResponseBody(t, response, "", p)
+	checkResponseCode(t, response, http.StatusCreated, "#0")
+	checkResponseBody(t, response, "", "#1")
 
-	id1, name1, email1, hash1, extra1 := getPendingJoin(t)
+	id1, name1, email1, hash1, extra1 := getOnePendingJoin(t)
 
 	if name1 != name || email1 != email {
 		t.Fatalf("unexpected join. Got %s, %s. Want %s, %s", name1, email1, name, email)
@@ -496,7 +497,7 @@ func TestJoin(t *testing.T) {
 	if len(q) != 1 || q[0].email != email || !strings.Contains(q[0].url, id1) || q[0].lang != lang {
 		t.Fatalf("Unexpected mailer data. Got %s, %s, %s. Want %s, %s, %s", q[0].email, q[0].url, q[0].lang, email, id1, lang)
 	}
-	assertPendingJoins(t, 1)
+	assertPendingJoinCount(t, 1)
 }
 
 func TestMultipleJoins(t *testing.T) {
@@ -529,7 +530,7 @@ func TestMultipleJoins(t *testing.T) {
 	p := paths["join"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(doMarshall(t, d)), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, http.StatusCreated, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -593,10 +594,10 @@ func TestJoinFails(t *testing.T) {
 	p := paths["join"]
 	// existing user
 	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusConflict, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusConflict, "#0")
+	checkResponseBody(t, response, "", "#1")
 
-	assertPendingJoins(t, 0)
+	assertPendingJoinCount(t, 0)
 }
 
 func TestJoinInvalidData(t *testing.T) {
@@ -627,11 +628,11 @@ func TestJoinInvalidData(t *testing.T) {
 	p := paths["join"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
-	assertPendingJoins(t, 0)
+	assertPendingJoinCount(t, 0)
 }
 
 // ******************************************************************
@@ -644,9 +645,9 @@ func TestJoinCheck(t *testing.T) {
 
 	p := paths["joinCheck"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d2 joinCheckData
+	var d2 joinCheckToken
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall data: %s", err)
@@ -666,8 +667,8 @@ func TestJoinCheckFails(t *testing.T) {
 	p := paths["joinCheck"]
 	// existing user
 	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusConflict, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusConflict, "#0")
+	checkResponseBody(t, response, "", "#1")
 }
 
 func TestJoinCheckInvalid(t *testing.T) {
@@ -687,14 +688,14 @@ func TestJoinCheckInvalid(t *testing.T) {
 	p := paths["joinCheck"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
 }
 
 // ******************************************************************
-func TestJoinVerify(t *testing.T) {
+func TestJoinActivate(t *testing.T) {
 	clearTables(t, "pending", "users")
 
 	name := "John Doe"
@@ -709,22 +710,22 @@ func TestJoinVerify(t *testing.T) {
 		"email":    email,
 		"password": password,
 	}
-	p := paths["joinVerify"]
+	p := paths["joinActivate"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	assertPendingJoins(t, 0)
-	assertUsers(t, 1)
-	assertSessions(t, 1)
+	assertPendingJoinCount(t, 0)
+	assertUserCount(t, 1)
+	assertSessionCount(t, 1)
 
-	var d2 joinVerifyToken
+	var d2 joinActivateToken
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
 	}
 }
 
-func TestJoinVerifyUserExists(t *testing.T) {
+func TestJoinActivateExists(t *testing.T) {
 	clearTables(t, "pending", "users", "sessions")
 
 	email := "johndoe@example.com"
@@ -737,8 +738,8 @@ func TestJoinVerifyUserExists(t *testing.T) {
 	// create user with name and password
 	addUser(t, d["name"], d["email"], d["password"])
 
-	assertUsers(t, 1)
-	assertSessions(t, 0)
+	assertUserCount(t, 1)
+	assertSessionCount(t, 0)
 
 	name := "John Smith"
 	password := "1234password"
@@ -752,15 +753,15 @@ func TestJoinVerifyUserExists(t *testing.T) {
 		"email":    email,
 		"password": password,
 	}
-	p := paths["joinVerify"]
+	p := paths["joinActivate"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	assertPendingJoins(t, 0)
-	assertUsers(t, 1)
-	assertSessions(t, 1)
+	assertPendingJoinCount(t, 0)
+	assertUserCount(t, 1)
+	assertSessionCount(t, 1)
 
-	var d2 joinVerifyToken
+	var d2 joinActivateToken
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
@@ -779,7 +780,7 @@ func TestJoinVerifyUserExists(t *testing.T) {
 
 	p = paths["signin"]
 	response = doPost(t, p, []byte(doMarshall(t, d3)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#1")
 
 	var d4 signinToken
 	err = json.Unmarshal(response.Body.Bytes(), &d4)
@@ -792,7 +793,7 @@ func TestJoinVerifyUserExists(t *testing.T) {
 	}
 }
 
-func TestJoinVerifyFails(t *testing.T) {
+func TestJoinActivateFails(t *testing.T) {
 	clearTables(t, "pending", "users")
 	resetMailer()
 
@@ -808,10 +809,10 @@ func TestJoinVerifyFails(t *testing.T) {
 		"email":    email,
 		"password": password,
 	}
-	p := paths["joinVerify"]
+	p := paths["joinActivate"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusNotFound, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusNotFound, "#0")
+	checkResponseBody(t, response, "", "#1")
 
 	// incorrect email
 	d2 := map[string]string{
@@ -820,8 +821,8 @@ func TestJoinVerifyFails(t *testing.T) {
 		"password": password,
 	}
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
-	checkResponseBody(t, response, "", p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#2")
+	checkResponseBody(t, response, "", "#3")
 
 	// incorrect password
 	d3 := map[string]string{
@@ -830,13 +831,13 @@ func TestJoinVerifyFails(t *testing.T) {
 		"password": "1234password",
 	}
 	response = doPost(t, p, []byte(doMarshall(t, d3)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#2")
-	checkResponseBody(t, response, "", p+"#2")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#4")
+	checkResponseBody(t, response, "", "#5")
 
-	assertPendingJoins(t, 1)
+	assertPendingJoinCount(t, 1)
 }
 
-func TestJoinVerifyInvalid(t *testing.T) {
+func TestJoinActivateInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -858,10 +859,10 @@ func TestJoinVerifyInvalid(t *testing.T) {
 		{`{"id": "1234", "email": "a@b.com", "password": ""}`, 400},          // empty password
 	}
 
-	p := paths["joinVerify"]
+	p := paths["joinActivate"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -885,13 +886,13 @@ func TestJoinFlow(t *testing.T) {
 	}
 	p := paths["join"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusCreated, "#0")
+	checkResponseBody(t, response, "", "#1")
 
-	assertPendingJoins(t, 1)
+	assertPendingJoinCount(t, 1)
 
 	// id comes from email link
-	id, _, _, _, _ := getPendingJoin(t)
+	id, _, _, _, _ := getOnePendingJoin(t)
 
 	// verify pending join and check token
 	d2 := map[string]string{
@@ -899,15 +900,15 @@ func TestJoinFlow(t *testing.T) {
 		"email":    email,
 		"password": password,
 	}
-	p = paths["joinVerify"]
+	p = paths["joinActivate"]
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#2")
 
-	assertPendingJoins(t, 0)
-	assertUsers(t, 1)
-	assertSessions(t, 1)
+	assertPendingJoinCount(t, 0)
+	assertUserCount(t, 1)
+	assertSessionCount(t, 1)
 
-	var d3 joinVerifyToken
+	var d3 joinActivateToken
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
@@ -932,7 +933,7 @@ func TestJoinFlow(t *testing.T) {
 
 	p = paths["signin"]
 	response = doPost(t, p, []byte(doMarshall(t, d4)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#3")
 
 	var d5 signinToken
 	err = json.Unmarshal(response.Body.Bytes(), &d5)
@@ -946,7 +947,7 @@ func TestJoinFlow(t *testing.T) {
 	// ensure new user has default profile
 	p = paths["auth+profile"]
 	response = doGet(t, p, d5.Token)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#4")
 
 	var d6 profileToken
 	err = json.Unmarshal(response.Body.Bytes(), &d6)
@@ -979,9 +980,9 @@ func TestResetPassword(t *testing.T) {
 	}
 	p := paths["resetPassword"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, p+"#0")
+	checkResponseCode(t, response, http.StatusCreated, "#0")
 
-	id, email := getPendingResetPassword(t)
+	id, email := getOnePendingResetPassword(t)
 
 	q := resetMailer()
 	if len(q) != 1 || q[0].email != email || !strings.Contains(q[0].url, id) || q[0].lang != d1["lang"] {
@@ -1003,9 +1004,9 @@ func TestResetPasswordFails(t *testing.T) {
 	// no user
 	p := paths["resetPassword"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusNotFound, p+"#0")
+	checkResponseCode(t, response, http.StatusNotFound, "#0")
 
-	assertPendingPasswordResets(t, 0)
+	assertPendingResetPasswordCount(t, 0)
 }
 
 func TestResetPasswordInvalid(t *testing.T) {
@@ -1027,14 +1028,14 @@ func TestResetPasswordInvalid(t *testing.T) {
 	p := paths["resetPassword"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
 }
 
 // ******************************************************************
-func TestResetPasswordVerify(t *testing.T) {
+func TestNewPassword(t *testing.T) {
 	clearTables(t, "pending", "users", "sessions")
 	resetMailer()
 
@@ -1052,17 +1053,17 @@ func TestResetPasswordVerify(t *testing.T) {
 		"email":    email,
 		"password": newPassword,
 	}
-	p := paths["resetPasswordVerify"]
+	p := paths["newPassword"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d2 resetPasswordToken
+	var d2 newPasswordToken
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
-		t.Fatalf("failed to unmarshall reset password token: %s", err)
+		t.Fatalf("failed to unmarshall new password token: %s", err)
 	}
 
-	assertPendingPasswordResets(t, 0)
+	assertPendingResetPasswordCount(t, 0)
 
 	// check password has changed
 	_, _, passwordHash := getUser(t, email)
@@ -1073,7 +1074,7 @@ func TestResetPasswordVerify(t *testing.T) {
 	}
 }
 
-func TestResetPasswordVerifyFails(t *testing.T) {
+func TestNewPasswordFails(t *testing.T) {
 	clearTables(t, "pending", "users")
 	resetMailer()
 
@@ -1082,7 +1083,7 @@ func TestResetPasswordVerifyFails(t *testing.T) {
 
 	id := addPendingResetPassword(t, email)
 
-	p := paths["resetPasswordVerify"]
+	p := paths["newPassword"]
 	// unknown id
 	d1 := map[string]string{
 		"id":       "0000000000",
@@ -1090,10 +1091,10 @@ func TestResetPasswordVerifyFails(t *testing.T) {
 		"password": password,
 	}
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusNotFound, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusNotFound, "#0")
+	checkResponseBody(t, response, "", "#1")
 
-	assertPendingPasswordResets(t, 1)
+	assertPendingResetPasswordCount(t, 1)
 
 	// incorrect email
 	d2 := map[string]string{
@@ -1102,10 +1103,10 @@ func TestResetPasswordVerifyFails(t *testing.T) {
 		"password": password,
 	}
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
-	checkResponseBody(t, response, "", p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#2")
+	checkResponseBody(t, response, "", "#3")
 
-	assertPendingPasswordResets(t, 1)
+	assertPendingResetPasswordCount(t, 1)
 
 	// user gone (no user)
 	d3 := map[string]string{
@@ -1114,13 +1115,13 @@ func TestResetPasswordVerifyFails(t *testing.T) {
 		"password": password,
 	}
 	response = doPost(t, p, []byte(doMarshall(t, d3)), "")
-	checkResponseCode(t, response, http.StatusGone, p+"#2")
-	checkResponseBody(t, response, "", p+"#2")
+	checkResponseCode(t, response, http.StatusGone, "#4")
+	checkResponseBody(t, response, "", "#5")
 
-	assertPendingPasswordResets(t, 1)
+	assertPendingResetPasswordCount(t, 1)
 }
 
-func TestResetPasswordVerifyInvalid(t *testing.T) {
+func TestNewPasswordInvalid(t *testing.T) {
 	type testData struct {
 		data string
 		code int
@@ -1142,10 +1143,10 @@ func TestResetPasswordVerifyInvalid(t *testing.T) {
 		{`{"id": "1234", "email": "a@b.com", "password": ""}`, 400},            // empty password
 	}
 
-	p := paths["resetPasswordVerify"]
+	p := paths["newPassword"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -1167,9 +1168,9 @@ func TestResetPasswordFlow(t *testing.T) {
 	d1 := map[string]string{"email": email, "lang": "en"}
 	p := paths["resetPassword"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusCreated, p+"#0")
+	checkResponseCode(t, response, http.StatusCreated, "#0")
 
-	id, email := getPendingResetPassword(t)
+	id, email := getOnePendingResetPassword(t)
 
 	// verify password reset
 	d2 := map[string]string{
@@ -1177,11 +1178,11 @@ func TestResetPasswordFlow(t *testing.T) {
 		"email":    email,
 		"password": newPassword,
 	}
-	p = paths["resetPasswordVerify"]
+	p = paths["newPassword"]
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#1")
 
-	var d3 resetPasswordToken
+	var d3 newPasswordToken
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("failed to unmarshall token: %s", err)
@@ -1194,7 +1195,7 @@ func TestResetPasswordFlow(t *testing.T) {
 	}
 	p = paths["signin"]
 	response = doPost(t, p, []byte(doMarshall(t, d4)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#2")
 
 	var d5 signinToken
 	err = json.Unmarshal(response.Body.Bytes(), &d5)
@@ -1211,14 +1212,14 @@ func TestGetAccount(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
 
 	p := paths["auth+account"]
 	response := doGet(t, p, session)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
 	var d accountToken
 	err := json.Unmarshal(response.Body.Bytes(), &d)
@@ -1238,7 +1239,7 @@ func TestGetAccountFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	addUserSession(t,
+	addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1246,11 +1247,11 @@ func TestGetAccountFails(t *testing.T) {
 	p := paths["auth+account"]
 	// unauthorized
 	response := doGet(t, p, "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// invalid session
 	response = doGet(t, p, "0000000000")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#1")
 }
 
 // ******************************************************************
@@ -1261,7 +1262,7 @@ func TestUpdateAccount(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1274,7 +1275,7 @@ func TestUpdateAccount(t *testing.T) {
 	}
 	p := paths["auth+account"]
 	response := doPut(t, p, []byte(doMarshall(t, d1)), session)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
 	_, currentName, _ := getUser(t, email)
 	if currentName != newName {
@@ -1289,7 +1290,7 @@ func TestUpdateAccountFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	addUserSession(t,
+	addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1300,11 +1301,11 @@ func TestUpdateAccountFails(t *testing.T) {
 	// no session
 	p := paths["auth+account"]
 	response := doPut(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// invalid session
 	response = doPut(t, p, []byte(doMarshall(t, d1)), "0000000000")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#1")
 }
 
 func TestUpdateAccountInvalid(t *testing.T) {
@@ -1314,7 +1315,7 @@ func TestUpdateAccountInvalid(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1335,7 +1336,7 @@ func TestUpdateAccountInvalid(t *testing.T) {
 	p := paths["auth+account"]
 	for i, d := range data {
 		response := doPut(t, p, []byte(d.data), session)
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -1349,7 +1350,7 @@ func TestDeleteAccount(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1360,10 +1361,10 @@ func TestDeleteAccount(t *testing.T) {
 
 	p := paths["auth+account"]
 	response := doDelete(t, p, []byte(doMarshall(t, d)), session)
-	checkResponseCode(t, response, http.StatusNoContent, p+"#0")
+	checkResponseCode(t, response, http.StatusNoContent, "#0")
 
-	assertUsers(t, 0)
-	assertSessions(t, 0)
+	assertUserCount(t, 0)
+	assertSessionCount(t, 0)
 }
 
 func TestDeleteAccountFails(t *testing.T) {
@@ -1373,7 +1374,7 @@ func TestDeleteAccountFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1382,17 +1383,17 @@ func TestDeleteAccountFails(t *testing.T) {
 	// Test no token
 	d := map[string]string{"password": password}
 	response := doDelete(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// Test no password
 	d = map[string]string{}
 	response = doDelete(t, p, []byte(doMarshall(t, d)), session)
-	checkResponseCode(t, response, http.StatusBadRequest, p+"#1")
+	checkResponseCode(t, response, http.StatusBadRequest, "#1")
 
 	// Test invalid password
 	d = map[string]string{"password": "1234password"}
 	response = doDelete(t, p, []byte(doMarshall(t, d)), session)
-	checkResponseCode(t, response, http.StatusConflict, p+"#2")
+	checkResponseCode(t, response, http.StatusConflict, "#2")
 
 	getUser(t, email)
 }
@@ -1404,7 +1405,7 @@ func TestDeleteAccountInvalid(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1425,7 +1426,7 @@ func TestDeleteAccountInvalid(t *testing.T) {
 	p := paths["auth+account"]
 	for i, d := range data {
 		response := doDelete(t, p, []byte(d.data), session)
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -1439,7 +1440,7 @@ func TestGetProfile(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	user, session := addUserSession(t,
+	user, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1450,11 +1451,11 @@ func TestGetProfile(t *testing.T) {
 			"counter": 32,
 		},
 	}
-	addUserProfile(t, user, data)
+	addProfile(t, user, data)
 
 	p := paths["auth+profile"]
 	response := doGet(t, p, session)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
 	var d1 profileToken
 	err := json.Unmarshal(response.Body.Bytes(), &d1)
@@ -1477,20 +1478,20 @@ func TestGetProfileFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	user, _ := addUserSession(t,
+	user, _ := addUserWithSession(t,
 		name,
 		email,
 		password)
-	addUserProfile(t, user, defaultProfile())
+	addProfile(t, user, defaultProfile())
 
 	p := paths["auth+profile"]
 	// unauthorized
 	response := doGet(t, p, "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// invalid session
 	response = doGet(t, p, "0000000000")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#1")
 }
 
 // ******************************************************************
@@ -1501,15 +1502,15 @@ func TestUpdateProfile(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	user, session := addUserSession(t,
+	user, session := addUserWithSession(t,
 		name,
 		email,
 		password)
-	addUserProfile(t, user, defaultProfile())
+	addProfile(t, user, defaultProfile())
 
 	p := paths["auth+profile"]
 	response := doGet(t, p, session)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
 	var d1 profileToken
 	err := json.Unmarshal(response.Body.Bytes(), &d1)
@@ -1525,7 +1526,7 @@ func TestUpdateProfile(t *testing.T) {
 	}
 	p = paths["auth+profile"]
 	response = doPut(t, p, []byte(doMarshall(t, d2)), session)
-	checkResponseCode(t, response, http.StatusOK, p+"#1")
+	checkResponseCode(t, response, http.StatusOK, "#1")
 
 	var d3 profileToken
 	err = json.Unmarshal(response.Body.Bytes(), &d3)
@@ -1540,7 +1541,7 @@ func TestUpdateProfile(t *testing.T) {
 
 	// check profile updated
 	response = doGet(t, p, session)
-	checkResponseCode(t, response, http.StatusOK, p+"#2")
+	checkResponseCode(t, response, http.StatusOK, "#2")
 
 	var d4 profileToken
 	err = json.Unmarshal(response.Body.Bytes(), &d4)
@@ -1560,7 +1561,7 @@ func TestUpdateProfileFails(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	addUserSession(t,
+	addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1572,11 +1573,11 @@ func TestUpdateProfileFails(t *testing.T) {
 		"name": "John Smith",
 	}
 	response := doPut(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// invalid session
 	response = doPut(t, p, []byte(doMarshall(t, d1)), "0000000000")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#1")
 }
 
 func TestUpdateProfileInvalid(t *testing.T) {
@@ -1585,7 +1586,7 @@ func TestUpdateProfileInvalid(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1606,7 +1607,7 @@ func TestUpdateProfileInvalid(t *testing.T) {
 	p := paths["auth+profile"]
 	for i, d := range data {
 		response := doPut(t, p, []byte(d.data), session)
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
@@ -1621,7 +1622,7 @@ func TestUpdatePassword(t *testing.T) {
 	password := "password1234"
 	newPassword := "1234password"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1632,8 +1633,8 @@ func TestUpdatePassword(t *testing.T) {
 	}
 	p := paths["auth+password"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), session)
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
-	checkResponseBody(t, response, "", p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#0")
+	checkResponseBody(t, response, "", "#1")
 
 	// check signin works with new password
 	d2 := map[string]string{
@@ -1642,7 +1643,7 @@ func TestUpdatePassword(t *testing.T) {
 	}
 	p = paths["signin"]
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
-	checkResponseCode(t, response, http.StatusOK, p+"#0")
+	checkResponseCode(t, response, http.StatusOK, "#2")
 
 	var d3 signinToken
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
@@ -1659,7 +1660,7 @@ func TestUpdatePasswordFails(t *testing.T) {
 	password := "password1234"
 	newPassword := "1234password"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1671,11 +1672,11 @@ func TestUpdatePasswordFails(t *testing.T) {
 	}
 	// no session
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#0")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// invalid session
 	response = doPost(t, p, []byte(doMarshall(t, d1)), "0000000000")
-	checkResponseCode(t, response, http.StatusUnauthorized, p+"#1")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#1")
 
 	// invalid password
 	d2 := map[string]string{
@@ -1683,7 +1684,7 @@ func TestUpdatePasswordFails(t *testing.T) {
 		"newPassword": newPassword,
 	}
 	response = doPost(t, p, []byte(doMarshall(t, d2)), session)
-	checkResponseCode(t, response, http.StatusConflict, p+"#2")
+	checkResponseCode(t, response, http.StatusConflict, "#2")
 }
 
 func TestUpdatePasswordInvalid(t *testing.T) {
@@ -1693,7 +1694,7 @@ func TestUpdatePasswordInvalid(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	_, session := addUserSession(t,
+	_, session := addUserWithSession(t,
 		name,
 		email,
 		password)
@@ -1718,7 +1719,7 @@ func TestUpdatePasswordInvalid(t *testing.T) {
 	p := paths["auth+password"]
 	for i, d := range data {
 		response := doPost(t, p, []byte(d.data), session)
-		tag := fmt.Sprintf("%s#%d", p, i)
+		tag := fmt.Sprintf("#%d", i)
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}

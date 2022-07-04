@@ -46,12 +46,12 @@ func defaultProfile() map[string]any {
 // }
 
 var paths = map[string]string{
-	"signin":              "/api/signin",
-	"join":                "/api/join",
-	"joinCheck":           "/api/join/check",
-	"joinVerify":          "/api/join/verify",
-	"resetPassword":       "/api/reset-password",
-	"resetPasswordVerify": "/api/reset-password/verify",
+	"signin":        "/api/signin",
+	"join":          "/api/join",
+	"joinCheck":     "/api/join/check",
+	"joinActivate":  "/api/join/activate",
+	"resetPassword": "/api/reset-password",
+	"newPassword":   "/api/reset-password/new",
 	// "auth": "/api/auth",
 	// "auth+account": "/account",
 	// "auth+tags": "/tags/:id",
@@ -104,9 +104,9 @@ func (a *GoTags) initialize(databaseURL string, debugAPI bool) {
 	router.POST(paths["signin"], a.signin)
 	router.POST(paths["join"], a.join)
 	router.POST(paths["joinCheck"], a.joinCheck)
-	router.POST(paths["joinVerify"], a.joinVerify)
+	router.POST(paths["joinActivate"], a.joinActivate)
 	router.POST(paths["resetPassword"], a.resetPassword)
-	router.POST(paths["resetPasswordVerify"], a.resetPasswordVerify)
+	router.POST(paths["newPassword"], a.newPassword)
 
 	authorized := router.Group(paths["auth"])
 	authorized.Use(a.auth())
@@ -250,8 +250,8 @@ func (a *GoTags) join(c *gin.Context) {
 		return
 	}
 
-	// create join verify url
-	req, err := http.NewRequest("GET", paths["joinVerify"], nil)
+	// create join activate url
+	req, err := http.NewRequest("GET", paths["joinActivate"], nil)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -301,7 +301,7 @@ func (a *GoTags) joinCheck(c *gin.Context) {
 }
 
 //
-func (a *GoTags) joinVerify(c *gin.Context) {
+func (a *GoTags) joinActivate(c *gin.Context) {
 	var d struct {
 		ID       string `json:"id" binding:"required"`
 		Email    string `json:"email" binding:"required,email"`
@@ -448,7 +448,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 }
 
 //
-func (a *GoTags) resetPasswordVerify(c *gin.Context) {
+func (a *GoTags) newPassword(c *gin.Context) {
 	var d struct {
 		ID       string `json:"id" binding:"required"`
 		Email    string `json:"email" binding:"required,email"`
