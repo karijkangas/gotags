@@ -26,7 +26,7 @@ func main() {
 
 	var app GoTags
 
-	app.initialize(k.String("GOTAGS_DATABASE_URL"))
+	app.initialize(k.String("GOTAGS_DATABASE_URL"), k.Bool("GOTAGS_DEBUG_API"))
 	defer app.pool.Close()
 
 	app.run(k.String("GOTAGS_SERVER"))

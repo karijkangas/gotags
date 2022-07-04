@@ -1,0 +1,118 @@
+---
+- hosts: all
+  roles:
+    - role: gantsign.golang
+      golang_gopath: "$HOME/workspace-go"
+  become: yes
+  vars:
+    app_path: /vm-share
+    api_user: gotags
+    domain: gotagsavaruus.com
+  tasks:
+    - name: Update repositories cache and upgrade all
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+        upgrade: dist
+
+    - name: Add gotags user
+      ansible.builtin.user:
+        name: "{{ api_user }}"
+        shell: /bin/bash
+
+    - name: Install tools
+      apt:
+        name:
+          - apt-transport-https
+          - build-essential
+          - curl
+          - wget
+          - git
+          - "linux-headers-{{ ansible_kernel }}"
+          - lsb-release
+          - vim
+          - tmux
+
+    # DB
+    - name: Install PostgreSQL database server
+      apt:
+        name:
+          - postgresql
+          - postgresql-client
+          - postgresql-contrib
+
+    - name: Install Ansible deps for managing PostgreSQL
+      apt:
+        name:
+          - libpq-dev
+          - python3-psycopg2
+
+    - name: Add PostgreSQL user
+      become: yes
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: yes
+      postgresql_user:
+        name: "{{ api_user }}"
+        password: "{{ api_user }}"
+        role_attr_flags: LOGIN,CREATEDB
+
+    - name: Add PostgreSQL db
+      become: yes
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: yes
+      postgresql_db:
+        name: "{{ api_user }}"
+        owner: "{{ api_user }}"
+
+    - name: Set DB for API
+      become: no
+      lineinfile:
+        dest: "/home/{{ api_user }}/.profile"
+        regexp: "^(export )?DATABASE_URL=.*# PROVISIONED_VENV"
+        line: "export DATABASE_URL=postgres:///{{ api_user }}  # PROVISIONED_VENV"
+
+    - name: "install nginx"
+      apt:
+        name: ["nginx"]
+        state: latest
+
+    - name: "create www directory"
+      file:
+        path: /var/www/{{ domain }}
+        state: directory
+        mode: "0775"
+        owner: "{{ api_user }}"
+        group: "{{ api_user }}"
+
+    - name: delete default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: copy nginx site.conf
+      template:
+        src: /vm-share/utility/site-debug.conf.j2
+        dest: /etc/nginx/sites-enabled/{{ domain }}
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart nginx
+
+    # Extra dependencies
+    - name: List API OS deps
+      shell: grep -v "#" "{{ app_path }}/utility/requirements-bullseye-debug.apt" | grep -v "^\s*$";
+      register: api_deps_result
+      ignore_errors: True
+
+    - name: Install API OS deps
+      apt:
+        name: "{{ api_deps_result.stdout_lines }}"
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted

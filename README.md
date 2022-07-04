@@ -58,7 +58,8 @@ sudo vim /etc/fstab
 sudo mount -a
 
 sudo ansible-galaxy install gantsign.golang
-sudo ansible-playbook --connection=local --inventory 127.0.0.1, /vm-share/gotags/utility/playbook-bullseye.yml
+#sudo ansible-playbook --connection=local --inventory 127.0.0.1, /vm-share/gotags/utility/playbook-bullseye.yml
+sudo ansible-playbook --connection=local --inventory 127.0.0.1, /vm-share/gotags/utility/playbook-bullseye-debug.yml
 
 
 sudo su - gotags
@@ -94,10 +95,17 @@ psql # reset database
 
 ```shell
 go test
-go test -run TestDeleteAccountInvalid
+go test -run TestDeleteAccount
 
 go build
 ./gotags
+```
+
+Gotags debug API for automatic testing:
+
+```shell
+go test --tags=gotags_debug_api
+go build --tags=gotags_debug_api
 ```
 
 # Swagger UI (Apple)

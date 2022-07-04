@@ -29,6 +29,10 @@ func sasMailer(email, url, lang string) error {
 	return nil
 }
 
+func defaultProfile() map[string]any {
+	return map[string]any{}
+}
+
 // func supportedLang(lang string) string {
 // 	var supported = map[string]string{
 // 		"en": "en",
@@ -51,9 +55,13 @@ var paths = map[string]string{
 	// "auth": "/api/auth",
 	// "auth+account": "/account",
 	// "auth+tags": "/tags/:id",
-	"auth":         "",
-	"auth+account": "/api/auth/account",
-	"auth+tags":    "/api/auth/tags/:id",
+	"auth":          "",
+	"auth+account":  "/api/auth/account",
+	"auth+profile":  "/api/auth/profile",
+	"auth+password": "/api/auth/password",
+	"auth+tags":     "/api/auth/tags/:id",
+	//
+	"debug+pending": "/debug/pending",
 }
 
 // GoTags ...
@@ -85,7 +93,7 @@ func (a *GoTags) auth() gin.HandlerFunc {
 	}
 }
 
-func (a *GoTags) initialize(databaseURL string) {
+func (a *GoTags) initialize(databaseURL string, debugAPI bool) {
 	pool, err := pgxpool.Connect(context.Background(), databaseURL)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
@@ -103,10 +111,17 @@ func (a *GoTags) initialize(databaseURL string) {
 	authorized := router.Group(paths["auth"])
 	authorized.Use(a.auth())
 	{
-		authorized.PATCH(paths["auth+account"], a.modifyAccount)
+		authorized.GET(paths["auth+account"], a.getAccount)
+		authorized.PUT(paths["auth+account"], a.updateAccount)
 		authorized.DELETE(paths["auth+account"], a.deleteAccount)
+		authorized.GET(paths["auth+profile"], a.getProfile)
+		authorized.PUT(paths["auth+profile"], a.updateProfile)
+		authorized.POST(paths["auth+password"], a.updatePassword)
 		authorized.GET(paths["auth+tags"], a.tag)
 	}
+
+	// initialize gotags debug api with "go test --tags=gotags_debug_api"
+	a.initializeExtra(router)
 
 	a.pool = pool
 	a.router = router
@@ -322,9 +337,13 @@ func (a *GoTags) joinVerify(c *gin.Context) {
 	}
 	extra := data["extra"]
 
+	// do transaction: add user, remove pending, add session and profile
+	tx, err := a.pool.Begin(context.Background())
+	defer tx.Rollback(context.Background()) // safe to call after commit
+
 	// add user
 	var user int
-	row = a.pool.QueryRow(
+	row = tx.QueryRow(
 		context.Background(),
 		`INSERT INTO users (name, email, password_hash)
 			VALUES ($1, $2, $3)
@@ -338,18 +357,28 @@ func (a *GoTags) joinVerify(c *gin.Context) {
 		return
 	}
 
-	// remove pending join and create a session
+	profile := defaultProfile()
+
+	// batched: remove pending join, create a session and a profile
 	var token string
 	b := &pgx.Batch{}
 	b.Queue(`DELETE FROM pending WHERE email = $1 AND category = 'join';`, email)
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
-	r := a.pool.SendBatch(context.Background(), b)
+	b.Queue(`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, profile)
+	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
-	r.Exec()           // delete, ignore errors
-	row = r.QueryRow() // insert
-	err = row.Scan(&token)
+	_, err1 := r.Exec()               // delete pending
+	err2 := r.QueryRow().Scan(&token) // insert session
+	_, err3 := r.Exec()               // insert profile
 
+	if err1 != nil || err2 != nil || err3 != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	r.Close()
+
+	err = tx.Commit(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -455,11 +484,15 @@ func (a *GoTags) resetPasswordVerify(c *gin.Context) {
 		return
 	}
 
+	// do as transaction: delete pending, update user password, add session
+	tx, err := a.pool.Begin(context.Background())
+	defer tx.Rollback(context.Background()) // safe to call after commit
+
 	// delete request and update user password
 	b := &pgx.Batch{}
 	b.Queue(`DELETE FROM pending WHERE category = 'reset_password' AND id = $1;`, id)
 	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, name;`, passwordHash, email)
-	r := a.pool.SendBatch(context.Background(), b)
+	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
 	r.Exec()           // delete, ignore errors
@@ -472,17 +505,23 @@ func (a *GoTags) resetPasswordVerify(c *gin.Context) {
 		c.Status(http.StatusGone)
 		return
 	}
+	r.Close()
 
 	// create a session
 	var token string
-	row = a.pool.QueryRow(
+	err = tx.QueryRow(
 		context.Background(),
 		`INSERT INTO sessions (user_id)
 			VALUES ($1)
 			RETURNING id;`,
-		user)
-	err = row.Scan(&token)
+		user).Scan(&token)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
 
+	// commit transaction
+	err = tx.Commit(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -492,55 +531,47 @@ func (a *GoTags) resetPasswordVerify(c *gin.Context) {
 }
 
 //
-func (a *GoTags) modifyAccount(c *gin.Context) {
+func (a *GoTags) getAccount(c *gin.Context) {
+	id := c.GetInt("user")
+
+	var name string
+	row := a.pool.QueryRow(
+		context.Background(),
+		`SELECT name FROM users WHERE id = $1;`,
+		id)
+	err := row.Scan(&name)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+//
+func (a *GoTags) updateAccount(c *gin.Context) {
 	var d struct {
-		Name     string `json:"name"`
-		Password string `json:"password"`
+		Name string `json:"name" binding:"required,min=1"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	name := d.Name
-	password := d.Password
+	id := c.GetInt("user")
 
-	// empty data
-	if name == "" && password == "" {
-		c.Status(http.StatusBadRequest)
+	row := a.pool.QueryRow(
+		context.Background(),
+		`UPDATE users SET name = $1
+			WHERE id = $2 
+			RETURNING name;`,
+		name, id)
+	var newName string
+	err := row.Scan(&newName)
+	if err != nil {
+		c.Status(http.StatusGone)
 		return
 	}
-
-	var passwordHash string
-
-	if password != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
-		if err != nil {
-			c.Status(http.StatusBadRequest)
-			return
-		}
-		passwordHash = string(hash)
-	}
-	user := c.GetInt("user")
-
-	// TODO: a better solution?
-	i := 0
-	b := &pgx.Batch{}
-	if name != "" {
-		b.Queue(`UPDATE users SET name = $1 WHERE id = $2;`, name, user)
-		i++
-	}
-	if passwordHash != "" {
-		b.Queue(`UPDATE users SET password_hash = $1 WHERE id = $2;`, passwordHash, user)
-		i++
-	}
-	r := a.pool.SendBatch(context.Background(), b)
-	defer r.Close()
-
-	for ; i > 0; i-- {
-		r.Exec()
-	}
-
-	c.Status(http.StatusOK)
+	c.JSON(http.StatusOK, gin.H{"name": newName})
 }
 
 //
@@ -565,7 +596,7 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 	// validate password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
 	if err != nil {
-		c.Status(http.StatusBadRequest)
+		c.Status(http.StatusConflict)
 		return
 	}
 
@@ -573,11 +604,106 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 		context.Background(),
 		`DELETE FROM users WHERE id = $1;`, user)
 	if err != nil {
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusGone)
 		return
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+//
+func (a *GoTags) getProfile(c *gin.Context) {
+	id := c.GetInt("user")
+
+	var data map[string]any
+	row := a.pool.QueryRow(
+		context.Background(),
+		`SELECT data FROM profiles WHERE id = $1;`,
+		id)
+	err := row.Scan(&data)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+//
+func (a *GoTags) updateProfile(c *gin.Context) {
+	var d struct {
+		Data map[string]any `json:"data" binding:"required"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	data := d.Data
+	id := c.GetInt("user")
+
+	row := a.pool.QueryRow(
+		context.Background(),
+		`UPDATE profiles SET data = $1
+			WHERE id = $2
+			RETURNING data;`,
+		data, id)
+
+	var newData map[string]any
+	err := row.Scan(&newData)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": newData})
+}
+
+//
+func (a *GoTags) updatePassword(c *gin.Context) {
+	var d struct {
+		Password    string `json:"password" binding:"required,min=1"`
+		NewPassword string `json:"newPassword" binding:"required,min=1"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	password := d.Password
+	newPassword := d.NewPassword
+	user := c.GetInt("user")
+
+	// get current password hash
+	var hash string
+	row := a.pool.QueryRow(
+		context.Background(),
+		`SELECT password_hash FROM users WHERE id = $1;`,
+		user)
+	err := row.Scan(&hash)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+
+	// validate password
+	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	if err != nil {
+		c.Status(http.StatusConflict)
+		return
+	}
+
+	// generate new password hash
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), passwordHashCost)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// update password hash
+	_, err = a.pool.Exec(context.Background(), `UPDATE users SET password_hash = $1 WHERE id = $2;`, newHash, user)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+
+	c.Status(http.StatusOK)
 }
 
 //

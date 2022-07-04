@@ -157,25 +157,43 @@ paths:
         "410":
           description: User matching email not found
   /auth/account/:
-    patch:
+    get:
       description: |
-        Modify account.
-      parameters:
-        - description: Modify account data
-          in: body
-          name: data
-          required: true
-          schema:
-            $ref: "#/definitions/ModifyAccount"
+        Get account data.
       produces:
         - application/json
       responses:
         "200":
-          description: Account modified
+          description: Account data
+          schema:
+            $ref: "#/definitions/Account"
+        "401":
+          description: Invalid token
+        "410":
+          description: Failed, use gone?
+    put:
+      description: |
+        Update account data.
+      parameters:
+        - description: Update account data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/Account"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Account data updated
+          schema:
+            $ref: "#/definitions/Account"
         "400":
           description: Invalid data
         "401":
           description: Invalid token
+        "410":
+          description: Failed, use gone?
     delete:
       description: |
         Delete account.
@@ -195,15 +213,99 @@ paths:
           description: Invalid password
         "401":
           description: Invalid token
+        "409":
+          description: Incorrect password
+        "410":
+          description: Failed, use gone?
+  /auth/profile/:
+    get:
+      description: |
+        Get profile data.
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Account data
+          schema:
+            $ref: "#/definitions/Profile"
+        "401":
+          description: Invalid token
+        "410":
+          description: Failed, use gone?
+    put:
+      description: |
+        Update profile data.
+      parameters:
+        - description: Update profile data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/Profile"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Profile data updated
+          schema:
+            $ref: "#/definitions/Profile"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "410":
+          description: Failed, use gone?
+  /auth/password:
+    post:
+      description: |
+        Update password.
+      parameters:
+        - description: Update password data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/Password"
+      produces:
+        - application/json
+      responses:
+        "204":
+          description: Password changed
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "409":
+          description: Incorrect password
+        "410":
+          description: Failed, use gone?
+  /debug/pending:
+    get:
+      description: |
+        DEBUG API: get pending
+      produces:
+        - application/json
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+          description: Category
+      responses:
+        "200":
+          description: Pending
+          schema:
+            $ref: "#/definitions/DebugGetPending"
 definitions:
   JoinCheck:
+    type: object
     properties:
       email:
         type: string
     required:
       - email
-    type: object
   Join:
+    type: object
     properties:
       name:
         type: string
@@ -219,8 +321,8 @@ definitions:
       - name
       - email
       - password
-    type: object
   JoinVerify:
+    type: object
     properties:
       id:
         type: string
@@ -232,8 +334,8 @@ definitions:
       - id
       - email
       - password
-    type: object
   Signin:
+    type: object
     properties:
       email:
         type: string
@@ -242,19 +344,19 @@ definitions:
     required:
       - email
       - password
-    type: object
   JoinToken:
+    type: object
     properties:
       name:
         type: string
       email:
+        type: string
+      token:
         type: string
       extra:
-        type: string
-      token:
-        type: string
-    type: object
+        type: object
   Token:
+    type: object
     properties:
       name:
         type: string
@@ -262,8 +364,8 @@ definitions:
         type: string
       token:
         type: string
-    type: object
   ResetPassword:
+    type: object
     properties:
       email:
         type: string
@@ -271,8 +373,8 @@ definitions:
         type: string
     required:
       - email
-    type: object
   ResetPasswordVerify:
+    type: object
     properties:
       id:
         type: string
@@ -284,18 +386,41 @@ definitions:
       - id
       - email
       - password
+  Account:
     type: object
-  ModifyAccount:
     properties:
       name:
         type: string
+  Profile:
+    type: object
+  Password:
+    type: object
+    properties:
       password:
         type: string
-    type: object
+      newPassword:
+        type: string
+    required:
+      - password
+      - newPassword
   DeleteAccount:
+    type: object
     properties:
       password:
         type: string
     required:
       - password
+  DebugGetPending:
     type: object
+    properties:
+      pending:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            email:
+              type: string
+            data:
+              type: object
