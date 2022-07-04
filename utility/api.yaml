@@ -60,10 +60,10 @@ paths:
           description: Invalid data
         "409":
           description: Account not available
-  /join/verify:
+  /join/activate:
     post:
       description: |
-        Verify pending join request. Creates a user account matching the pending join request
+        Activate pending join request. Creates a user account matching the pending join request
         data and removes the pending join request from the database. Given email and password
         must match the email and password in the pending join request data. Returns a session
         token.
@@ -73,7 +73,7 @@ paths:
           name: data
           required: true
           schema:
-            $ref: "#/definitions/JoinVerify"
+            $ref: "#/definitions/JoinActivate"
       produces:
         - application/json
       responses:
@@ -130,19 +130,19 @@ paths:
           description: Invalid data
         "404":
           description: Unknown email
-  /reset-password/verify:
+  /reset-password/new:
     post:
       description: |
-        Resets password and removes the reset password request from the database. Given email
+        Sets new password and removes the reset password request from the database. Given email
         must match the email in the pending reset password request data. Returns a session
         token.
       parameters:
-        - description: Reset password verify data
+        - description: New password data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/ResetPasswordVerify"
+            $ref: "#/definitions/NewPassword"
       produces:
         - application/json
       responses:
@@ -321,7 +321,7 @@ definitions:
       - name
       - email
       - password
-  JoinVerify:
+  JoinActivate:
     type: object
     properties:
       id:
@@ -373,7 +373,7 @@ definitions:
         type: string
     required:
       - email
-  ResetPasswordVerify:
+  NewPassword:
     type: object
     properties:
       id:
