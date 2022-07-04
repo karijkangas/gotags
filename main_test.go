@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"reflect"
 	"strings"
@@ -58,10 +57,6 @@ func doMarshall(t *testing.T, d any) []byte {
 		t.Fatalf("JSON marshall failed: %s", err)
 	}
 	return s
-}
-
-func encodeURL(path string, q url.Values) string {
-	return fmt.Sprintf("%s?%s", path, q.Encode())
 }
 
 func addToken(req *http.Request, token string) {
