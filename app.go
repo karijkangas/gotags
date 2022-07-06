@@ -94,7 +94,7 @@ func (a *GoTags) auth() gin.HandlerFunc {
 	}
 }
 
-func (a *GoTags) initialize(databaseURL string, debugAPI bool) {
+func (a *GoTags) initialize(databaseURL string) {
 	pool, err := pgxpool.Connect(context.Background(), databaseURL)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)

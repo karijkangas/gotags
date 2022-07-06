@@ -365,7 +365,7 @@ type profileToken struct {
 
 // ******************************************************************
 func TestMain(m *testing.M) {
-	app.initialize(databaseURL, true)
+	app.initialize(databaseURL)
 
 	mailer := app.mailer
 	app.mailer = func(e, u, l string) error {
