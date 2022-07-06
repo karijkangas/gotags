@@ -27,6 +27,38 @@ type pending struct {
 }
 
 // ******************************************************************
+
+func TestDebugReset(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions", "profiles")
+
+	_ = addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
+	user, _ := addUserWithSession(t, "John Doe", "johndöe@example.com", "password1234")
+	addPendingResetPassword(t, "johndöe@example.com")
+	addProfile(t, user, map[string]any{})
+
+	assertUserCount(t, 1)
+	assertProfileCount(t, 1)
+	assertSessionCount(t, 1)
+	assertPendingJoinCount(t, 1)
+	assertPendingResetPasswordCount(t, 1)
+
+	p := paths["debug+reset"]
+	response := doPost(t, p, nil, "")
+	checkResponseCode(t, response, http.StatusOK, p)
+	checkResponseBody(t, response, "", p)
+
+	assertUserCount(t, 0)
+	assertProfileCount(t, 0)
+	assertSessionCount(t, 0)
+	assertPendingJoinCount(t, 0)
+	assertPendingResetPasswordCount(t, 0)
+
+	user, _ = addUserWithSession(t, "John Doe", "johndöe@example.com", "password1234")
+	if user != 1 {
+		t.Fatalf("User id serial not reset: %d", user)
+	}
+}
+
 func TestDebugGetPendingJoin(t *testing.T) {
 	clearTables(t, "pending", "users")
 

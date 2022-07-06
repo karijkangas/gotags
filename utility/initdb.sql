@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS profiles (
-  id INTEGER REFERENCES users PRIMARY KEY,
+  id INTEGER PRIMARY KEY REFERENCES users ON DELETE CASCADE,
   data JSONB not null default '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE default current_timestamp,
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
@@ -70,3 +70,4 @@ FOR EACH ROW
 EXECUTE FUNCTION trigger_update_modified_at();
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_idx ON users (email) INCLUDE (password_hash);
+ALTER SEQUENCE users_id_seq RESTART;

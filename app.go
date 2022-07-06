@@ -61,6 +61,7 @@ var paths = map[string]string{
 	"auth+password": "/api/auth/password",
 	"auth+tags":     "/api/auth/tags/:id",
 	//
+	"debug+reset":   "/debug/reset",
 	"debug+pending": "/debug/pending",
 }
 
@@ -339,6 +340,10 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 
 	// do transaction: add user, remove pending, add session and profile
 	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
 	defer tx.Rollback(context.Background()) // safe to call after commit
 
 	// add user

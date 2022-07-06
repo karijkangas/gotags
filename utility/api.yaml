@@ -151,7 +151,7 @@ paths:
           schema:
             $ref: "#/definitions/Token"
         "401":
-          description: Given email does not match the email in the request
+          description: Email does not match the email in the request
         "404":
           description: Password reset request not found
         "410":
@@ -279,6 +279,15 @@ paths:
           description: Incorrect password
         "410":
           description: Failed, use gone?
+  /debug/reset:
+    post:
+      description: |
+        DEBUG API: reset database
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Database reset
   /debug/pending:
     get:
       description: |

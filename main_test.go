@@ -260,6 +260,20 @@ func setProfile(t *testing.T, user int, data map[string]any) {
 	}
 }
 
+func assertProfileCount(t *testing.T, want int) {
+	c := context.Background()
+	var count int
+	err := app.pool.QueryRow(
+		c,
+		`SELECT COUNT(id) FROM profiles;`).Scan(&count)
+	if err != nil {
+		t.Fatalf("Query failed: %s.", err)
+	}
+	if count != want {
+		t.Fatalf("Counting Profiles. Got %d. Want %d", count, want)
+	}
+}
+
 func addPendingJoin(t *testing.T, name, email, password string) string {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
