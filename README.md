@@ -12,18 +12,26 @@ Action from [app.go](https://github.com/karijkangas/gotags/blob/main/app.go)
 
 [main_test.go](https://github.com/karijkangas/gotags/blob/main/main_test.go) tests main.go
 
-[env.json](https://github.com/karijkangas/gotags/blob/main/env.json) environment variables:
+Create local [env.json](https://github.com/karijkangas/gotags/blob/main/env.json) with variables database, server, and domain, like so:
 
-- database, server, domain
+```json
+{
+  "GOTAGS_DATABASE_URL": "postgres://gotags:gotags@localhost:5432/gotags",
+  "GOTAGS_SERVER": "0.0.0.0:8080",
+  "GOTAGS_DOMAIN": "https://gotagsavaruus.com/"
+}
+```
+
+Note these variables work inside virtual machine.
 
 # Local Debian 11 development image
 
+Create debian 11 (qemu) vm image:
+
+- root/gotags
+- gotags/gotags
+
 ```shell
-
-create debian 11 qemu vm image
-	root/gotags
-	gotags/gotags
-
 apt-get install sudo vim cifs-utils ansible
 
 usermod -aG sudo gotags
