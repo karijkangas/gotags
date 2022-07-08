@@ -208,6 +208,8 @@ func addUser(t *testing.T, name, email, password string) int {
 	if err != nil {
 		t.Fatalf("Query failed: %s.", err)
 	}
+	setProfile(t, id, defaultProfile())
+
 	return id
 }
 
@@ -242,7 +244,7 @@ func addUserWithSession(t *testing.T, name, email, password string) (user int, s
 	return
 }
 
-func addProfile(t *testing.T, user int, data map[string]any) {
+func setProfile(t *testing.T, user int, data map[string]any) {
 	c := context.Background()
 	_, err := app.pool.Exec(c,
 		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
@@ -251,10 +253,10 @@ func addProfile(t *testing.T, user int, data map[string]any) {
 	}
 }
 
-func setProfile(t *testing.T, user int, data map[string]any) {
+func updateProfile(t *testing.T, user int, data map[string]any) {
 	c := context.Background()
 	_, err := app.pool.Exec(c,
-		`UPDATE profiles SET id = $1, data = $2 WHERE id = $1;`, user, data)
+		`UPDATE profiles SET data = $1 WHERE id = $2;`, data, user)
 	if err != nil {
 		t.Fatalf("Query failed: %s.", err)
 	}
@@ -331,35 +333,46 @@ func getUser(t *testing.T, email string) (id int, name, passwordHash string) {
 	return id, name, passwordHash
 }
 
+func compareProfiles(t *testing.T, got, want map[string]any) {
+	gots := fmt.Sprintf("%v", got)
+	wants := fmt.Sprintf("%v", want)
+	if gots != wants {
+		t.Fatalf("Profiles do not match: Got %s. Want %s", gots, wants)
+	}
+}
+
 // ******************************************************************
-type signinToken struct {
-	Name  string `json:"name" binding:"required"`
+type signinData struct {
+	Name    string         `json:"name" binding:"required"`
+	Email   string         `json:"email" binding:"required,email"`
+	Profile map[string]any `json:"profile" binding:"required"`
+	Token   string         `json:"token" binding:"required"`
+}
+
+type joinCheckData struct {
 	Email string `json:"email" binding:"required,email"`
-	Token string `json:"token" binding:"required"`
 }
 
-type joinCheckToken struct {
-	Email string `json:"email" binding:"required,email"`
+type joinActivateData struct {
+	Name    string         `json:"name" binding:"required"`
+	Email   string         `json:"email" binding:"required,email"`
+	Profile map[string]any `json:"profile" binding:"required"`
+	Token   string         `json:"token" binding:"required"`
+	Extra   map[string]any `json:"extra"`
 }
 
-type joinActivateToken struct {
-	Name  string         `json:"name" binding:"required"`
-	Email string         `json:"email" binding:"required,email"`
-	Extra map[string]any `json:"extra"`
-	Token string         `json:"token" binding:"required"`
+type newPasswordData struct {
+	Name    string         `json:"name" binding:"required"`
+	Email   string         `json:"email" binding:"required,email"`
+	Profile map[string]any `json:"profile" binding:"required"`
+	Token   string         `json:"token" binding:"required"`
 }
 
-type newPasswordToken struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required,email"`
-	Token string `json:"token" binding:"required"`
-}
-
-type accountToken struct {
+type accountData struct {
 	Name string `json:"name" binding:"required"`
 }
 
-type profileToken struct {
+type profileData struct {
 	Data map[string]any `json:"data" binding:"required"`
 }
 
@@ -398,14 +411,48 @@ func TestSignin(t *testing.T) {
 
 	p := paths["signin"]
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
-	checkResponseCode(t, response, http.StatusOK, p)
+	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d2 signinToken
+	var d2 signinData
 
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall response body: %s", err)
 	}
+
+	compareProfiles(t, d2.Profile, defaultProfile())
+}
+
+func TestSigninProfile(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	profile := map[string]any{
+		"gotagsavaruus": "yes",
+	}
+
+	user := addUser(t, name, email, password)
+	updateProfile(t, user, profile)
+
+	d1 := map[string]string{
+		"email":    email,
+		"password": password,
+	}
+
+	p := paths["signin"]
+	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
+	checkResponseCode(t, response, http.StatusOK, p)
+
+	var d2 signinData
+
+	err := json.Unmarshal(response.Body.Bytes(), &d2)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall response body: %s", err)
+	}
+
+	compareProfiles(t, d2.Profile, profile)
 }
 
 func TestSigninFails(t *testing.T) {
@@ -656,7 +703,7 @@ func TestJoinCheck(t *testing.T) {
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
 	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d2 joinCheckToken
+	var d2 joinCheckData
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall data: %s", err)
@@ -727,17 +774,22 @@ func TestJoinActivate(t *testing.T) {
 	assertUserCount(t, 1)
 	assertSessionCount(t, 1)
 
-	var d2 joinActivateToken
+	var d2 joinActivateData
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
 	}
+
+	compareProfiles(t, d2.Profile, defaultProfile())
 }
 
-func TestJoinActivateExists(t *testing.T) {
+func TestJoinActivateExisting(t *testing.T) {
 	clearTables(t, "pending", "users", "sessions")
 
 	email := "johndoe@example.com"
+	profile := map[string]any{
+		"gotagsavaruus": "yes",
+	}
 
 	d := map[string]string{
 		"name":     "John Doe",
@@ -745,7 +797,8 @@ func TestJoinActivateExists(t *testing.T) {
 		"password": "password1234",
 	}
 	// create user with name and password
-	addUser(t, d["name"], d["email"], d["password"])
+	user := addUser(t, d["name"], d["email"], d["password"])
+	updateProfile(t, user, profile)
 
 	assertUserCount(t, 1)
 	assertSessionCount(t, 0)
@@ -770,7 +823,7 @@ func TestJoinActivateExists(t *testing.T) {
 	assertUserCount(t, 1)
 	assertSessionCount(t, 1)
 
-	var d2 joinActivateToken
+	var d2 joinActivateData
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
@@ -780,6 +833,8 @@ func TestJoinActivateExists(t *testing.T) {
 	if d2.Name != name {
 		t.Fatalf("failed to update user name: Got %s. Want %s.", d2.Name, name)
 	}
+	// ensure profile is not updated
+	compareProfiles(t, d2.Profile, profile)
 
 	// check signin works with join request password
 	d3 := map[string]string{
@@ -791,7 +846,7 @@ func TestJoinActivateExists(t *testing.T) {
 	response = doPost(t, p, []byte(doMarshall(t, d3)), "")
 	checkResponseCode(t, response, http.StatusOK, "#1")
 
-	var d4 signinToken
+	var d4 signinData
 	err = json.Unmarshal(response.Body.Bytes(), &d4)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall signin token: %s", err)
@@ -917,7 +972,7 @@ func TestJoinFlow(t *testing.T) {
 	assertUserCount(t, 1)
 	assertSessionCount(t, 1)
 
-	var d3 joinActivateToken
+	var d3 joinActivateData
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("failed to unmarshall join verify token: %s", err)
@@ -944,7 +999,7 @@ func TestJoinFlow(t *testing.T) {
 	response = doPost(t, p, []byte(doMarshall(t, d4)), "")
 	checkResponseCode(t, response, http.StatusOK, "#3")
 
-	var d5 signinToken
+	var d5 signinData
 	err = json.Unmarshal(response.Body.Bytes(), &d5)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall signin token: %s", err)
@@ -958,7 +1013,7 @@ func TestJoinFlow(t *testing.T) {
 	response = doGet(t, p, d5.Token)
 	checkResponseCode(t, response, http.StatusOK, "#4")
 
-	var d6 profileToken
+	var d6 profileData
 	err = json.Unmarshal(response.Body.Bytes(), &d6)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall profile token: %s", err)
@@ -1052,8 +1107,13 @@ func TestNewPassword(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 	newPassword := "password9876"
+	profile := map[string]any{
+		"gotagsavaruus": "yes",
+	}
 
-	addUser(t, name, email, password)
+	user := addUser(t, name, email, password)
+	updateProfile(t, user, profile)
+
 	id := addPendingResetPassword(t, email)
 
 	// verify password reset
@@ -1066,11 +1126,12 @@ func TestNewPassword(t *testing.T) {
 	response := doPost(t, p, []byte(doMarshall(t, d1)), "")
 	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d2 newPasswordToken
+	var d2 newPasswordData
 	err := json.Unmarshal(response.Body.Bytes(), &d2)
 	if err != nil {
 		t.Fatalf("failed to unmarshall new password token: %s", err)
 	}
+	compareProfiles(t, d2.Profile, profile)
 
 	assertPendingResetPasswordCount(t, 0)
 
@@ -1191,11 +1252,12 @@ func TestResetPasswordFlow(t *testing.T) {
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
 	checkResponseCode(t, response, http.StatusOK, "#1")
 
-	var d3 newPasswordToken
+	var d3 newPasswordData
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("failed to unmarshall token: %s", err)
 	}
+	compareProfiles(t, d3.Profile, defaultProfile())
 
 	// check signin works with new password
 	d4 := map[string]string{
@@ -1206,7 +1268,7 @@ func TestResetPasswordFlow(t *testing.T) {
 	response = doPost(t, p, []byte(doMarshall(t, d4)), "")
 	checkResponseCode(t, response, http.StatusOK, "#2")
 
-	var d5 signinToken
+	var d5 signinData
 	err = json.Unmarshal(response.Body.Bytes(), &d5)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall signin token: %s", err)
@@ -1230,7 +1292,7 @@ func TestGetAccount(t *testing.T) {
 	response := doGet(t, p, session)
 	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d accountToken
+	var d accountData
 	err := json.Unmarshal(response.Body.Bytes(), &d)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall account token: %s", err)
@@ -1460,13 +1522,13 @@ func TestGetProfile(t *testing.T) {
 			"counter": 32,
 		},
 	}
-	addProfile(t, user, data)
+	updateProfile(t, user, data)
 
 	p := paths["auth+profile"]
 	response := doGet(t, p, session)
 	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d1 profileToken
+	var d1 profileData
 	err := json.Unmarshal(response.Body.Bytes(), &d1)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall profile token: %s", err)
@@ -1491,7 +1553,7 @@ func TestGetProfileFails(t *testing.T) {
 		name,
 		email,
 		password)
-	addProfile(t, user, defaultProfile())
+	updateProfile(t, user, defaultProfile())
 
 	p := paths["auth+profile"]
 	// unauthorized
@@ -1515,13 +1577,13 @@ func TestUpdateProfile(t *testing.T) {
 		name,
 		email,
 		password)
-	addProfile(t, user, defaultProfile())
+	updateProfile(t, user, defaultProfile())
 
 	p := paths["auth+profile"]
 	response := doGet(t, p, session)
 	checkResponseCode(t, response, http.StatusOK, "#0")
 
-	var d1 profileToken
+	var d1 profileData
 	err := json.Unmarshal(response.Body.Bytes(), &d1)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall profile token: %s", err)
@@ -1537,7 +1599,7 @@ func TestUpdateProfile(t *testing.T) {
 	response = doPut(t, p, []byte(doMarshall(t, d2)), session)
 	checkResponseCode(t, response, http.StatusOK, "#1")
 
-	var d3 profileToken
+	var d3 profileData
 	err = json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall profile token: %s", err)
@@ -1552,7 +1614,7 @@ func TestUpdateProfile(t *testing.T) {
 	response = doGet(t, p, session)
 	checkResponseCode(t, response, http.StatusOK, "#2")
 
-	var d4 profileToken
+	var d4 profileData
 	err = json.Unmarshal(response.Body.Bytes(), &d4)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall profile token: %s", err)
@@ -1654,7 +1716,7 @@ func TestUpdatePassword(t *testing.T) {
 	response = doPost(t, p, []byte(doMarshall(t, d2)), "")
 	checkResponseCode(t, response, http.StatusOK, "#2")
 
-	var d3 signinToken
+	var d3 signinData
 	err := json.Unmarshal(response.Body.Bytes(), &d3)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall signin token: %s", err)
@@ -1733,71 +1795,3 @@ func TestUpdatePasswordInvalid(t *testing.T) {
 		checkResponseBody(t, response, "", tag)
 	}
 }
-
-// ******************************************************************
-// // func TestTag(t *testing.T) {
-// // 	clearTables(t, "verifications", "users", "sessions")
-
-// // 	email := "johndoe@example.com"
-// // 	password := "password1234"
-// // 	passwordHash := "$2a$06$Xv1/JM33SjyeSxOoSez27eu6H1cSIG9snUxXUiSshQ5IZkYfaFz4e"
-
-// // 	addUser(t,
-// // 		"John Doe",
-// // 		email,
-// // 		passwordHash)
-
-// // 	d1 := map[string]string{
-// // 		"email":    email,
-// // 		"password": password,
-// // 	}
-
-// // 	response := doPost(t, "/api/signin", []byte(doMarshall(t, d1)), "")
-// // 	checkResponseCode(t, response, http.StatusOK)
-
-// // 	var d2 tokenData
-
-// // 	err := json.Unmarshal(response.Body.Bytes(), &d2)
-// // 	if err != nil {
-// // 		t.Fatalf("failed to unmarshall: %s", err)
-// // 	}
-
-// // 	// fmt.Printf("********** %s\n", d2.Token)
-// // 	// checkResponseBody(t, response, "")
-
-// // 	url := fmt.Sprintf("%s/%s", "/api/auth/tags", "1234567890")
-
-// // 	response = doGet(t, url, d2.Token)
-// // 	checkResponseCode(t, response, http.StatusOK)
-// // 	// checkResponseBody(t, response, "")
-// // 	// fmt.Printf("********** %s\n", response.Body.String())
-
-// // }
-
-// // func TestTagFail(t *testing.T) {
-// // 	clearTables(t, "users", "sessions")
-
-// // 	email := "johndoe@example.com"
-// // 	passwordHash := "$2a$06$Xv1/JM33SjyeSxOoSez27eu6H1cSIG9snUxXUiSshQ5IZkYfaFz4e"
-
-// // 	uid := addUser(t,
-// // 		"John Doe",
-// // 		email,
-// // 		passwordHash)
-
-// // 	sid := addSession(t, uid)
-// // 	_ = sid
-
-// // 	url := fmt.Sprintf("%s/%s", "/api/auth/tags", "1234567890")
-
-// // 	// test with invalid tokens
-// // 	response := doGet(t, url, "")
-// // 	checkResponseCode(t, response, http.StatusUnauthorized)
-
-// // 	response = doGet(t, url, "123")
-// // 	checkResponseCode(t, response, http.StatusUnauthorized)
-
-// // 	// test with valid token
-// // 	response = doGet(t, url, sid)
-// // 	checkResponseCode(t, response, http.StatusOK)
-// // }

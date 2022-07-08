@@ -33,18 +33,6 @@ func defaultProfile() map[string]any {
 	return map[string]any{}
 }
 
-// func supportedLang(lang string) string {
-// 	var supported = map[string]string{
-// 		"en": "en",
-// 		"fi": "fi",
-// 	}
-// 	s, ok := supported[lang]
-// 	if !ok {
-// 		return "en"
-// 	}
-// 	return s
-// }
-
 var paths = map[string]string{
 	"signin":        "/api/signin",
 	"join":          "/api/join",
@@ -52,9 +40,6 @@ var paths = map[string]string{
 	"joinActivate":  "/api/join/activate",
 	"resetPassword": "/api/reset-password",
 	"newPassword":   "/api/reset-password/new",
-	// "auth": "/api/auth",
-	// "auth+account": "/account",
-	// "auth+tags": "/tags/:id",
 	"auth":          "",
 	"auth+account":  "/api/auth/account",
 	"auth+profile":  "/api/auth/profile",
@@ -156,14 +141,18 @@ func (a *GoTags) signin(c *gin.Context) {
 	email := d.Email
 	password := d.Password
 
-	// get user id and password_hash
+	// get use data and profile
 	var user int
+	var data map[string]any
 	var name, passwordHash string
 	row := a.pool.QueryRow(
 		context.Background(),
-		`SELECT id, name, password_hash FROM users WHERE email = $1;`,
+		`WITH xuser AS (
+			SELECT id, name, password_hash FROM users WHERE email = $1
+		 )
+		 SELECT u.id, name, password_hash, data FROM profiles AS p JOIN xuser AS u ON p.id = u.id;`,
 		email)
-	err1 := row.Scan(&user, &name, &passwordHash)
+	err1 := row.Scan(&user, &name, &passwordHash, &data)
 
 	// validate password
 	err2 := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
@@ -188,7 +177,7 @@ func (a *GoTags) signin(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "token": token})
+	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "profile": data, "token": token})
 }
 
 //
@@ -363,19 +352,29 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	}
 
 	profile := defaultProfile()
+	var newProfile map[string]any
 
 	// batched: remove pending join, create a session and a profile
+	// use existing profile, if any
 	var token string
 	b := &pgx.Batch{}
 	b.Queue(`DELETE FROM pending WHERE email = $1 AND category = 'join';`, email)
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
-	b.Queue(`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, profile)
+	b.Queue(`WITH ins AS(
+				INSERT INTO profiles (id, data) 
+			   	VALUES ($1, $2)
+				ON CONFLICT(id) DO NOTHING
+				RETURNING data
+			)
+			SELECT * FROM ins
+			UNION
+				SELECT data FROM profiles WHERE id=$1;`, user, profile)
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
-	_, err1 := r.Exec()               // delete pending
-	err2 := r.QueryRow().Scan(&token) // insert session
-	_, err3 := r.Exec()               // insert profile
+	_, err1 := r.Exec()                    // delete pending
+	err2 := r.QueryRow().Scan(&token)      // insert session
+	err3 := r.QueryRow().Scan(&newProfile) // insert profile
 
 	if err1 != nil || err2 != nil || err3 != nil {
 		c.Status(http.StatusInternalServerError)
@@ -389,7 +388,7 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "extra": extra, "token": token})
+	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "profile": newProfile, "token": token, "extra": extra})
 }
 
 //
@@ -489,7 +488,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		return
 	}
 
-	// do as transaction: delete pending, update user password, add session
+	// do as transaction: delete pending, update user password, add session and get profile
 	tx, err := a.pool.Begin(context.Background())
 	defer tx.Rollback(context.Background()) // safe to call after commit
 
@@ -500,30 +499,36 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
-	r.Exec()           // delete, ignore errors
-	row = r.QueryRow() // update, check user gone
 	var user int
 	var name string
+	// var profile map[string]any
 
-	err = row.Scan(&user, &name)
+	r.Exec()                              // delete, ignore errors
+	err = r.QueryRow().Scan(&user, &name) // update, check user gone
+
 	if err != nil {
 		c.Status(http.StatusGone)
 		return
 	}
 	r.Close()
 
-	// create a session
+	b = &pgx.Batch{}
+	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
+	b.Queue(`SELECT data FROM profiles WHERE id = $1;`, user)
+	r = tx.SendBatch(context.Background(), b)
+	defer r.Close()
+
 	var token string
-	err = tx.QueryRow(
-		context.Background(),
-		`INSERT INTO sessions (user_id)
-			VALUES ($1)
-			RETURNING id;`,
-		user).Scan(&token)
-	if err != nil {
+	var profile map[string]any
+
+	err1 := r.QueryRow().Scan(&token)
+	err2 := r.QueryRow().Scan(&profile)
+
+	if err1 != nil || err2 != nil {
 		c.Status(http.StatusGone)
 		return
 	}
+	r.Close()
 
 	// commit transaction
 	err = tx.Commit(context.Background())
@@ -532,7 +537,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "token": token})
+	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "profile": profile, "token": token})
 }
 
 //

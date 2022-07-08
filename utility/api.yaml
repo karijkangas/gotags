@@ -7,7 +7,9 @@ info:
     name: MIT
   title: Gotagsavaruus REST API
   version: 0.0.1
-host: localhost.com:8000
+host: 127.0.0.1:8000
+servers:
+  - url: http://127.0.0.1:8000
 basePath: /api
 schemes:
   - http
@@ -15,26 +17,30 @@ produces:
   - application/json
 consumes:
   - application/json
+securityDefinitions:
+  ApiKeyAuth:
+    type: apiKey
+    in: header
+    name: Token
 paths:
   /join/check:
     post:
       description: |
-        Check account availability. Account is available if there is no existing user registered
-        with a given email address.
+        Check account availability. An account is available if the email is not used by an existing user.
       parameters:
-        - description: Join check data
+        - description: Join check input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/JoinCheck"
+            $ref: "#/definitions/INJoinCheck"
       produces:
         - application/json
       responses:
         "200":
           description: Account available
           schema:
-            $ref: "#/definitions/JoinCheck"
+            $ref: "#/definitions/OUTJoinCheck"
         "400":
           description: Invalid data
         "409":
@@ -43,14 +49,14 @@ paths:
     post:
       description: |
         Create a join request. Sends an email with a link to verify account. Join requests are
-        purged from the database after 1 day.
+        purged from the database after some time (1 day).
       parameters:
-        - description: Join data
+        - description: Join input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Join"
+            $ref: "#/definitions/INJoin"
       produces:
         - application/json
       responses:
@@ -68,23 +74,23 @@ paths:
         must match the email and password in the pending join request data. Returns a session
         token.
       parameters:
-        - description: Join verify data
+        - description: Join activate input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/JoinActivate"
+            $ref: "#/definitions/INJoinActivate"
       produces:
         - application/json
       responses:
         "200":
-          description: Join token data
+          description: Join activate output data
           schema:
-            $ref: "#/definitions/JoinToken"
+            $ref: "#/definitions/OUTJoinActivate"
         "400":
           description: Invalid data
         "401":
-          description: Invalid credentials
+          description: Invalid email/password
         "404":
           description: Join request not found
   /signin/:
@@ -92,35 +98,35 @@ paths:
       description: |
         Signin with email and password.
       parameters:
-        - description: Signin data
+        - description: Signin input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Signin"
+            $ref: "#/definitions/INSignin"
       produces:
         - application/json
       responses:
         "200":
-          description: Token
+          description: Signin output data
           schema:
-            $ref: "#/definitions/Token"
+            $ref: "#/definitions/OUTSignin"
         "400":
           description: Invalid data
         "401":
-          description: Invalid credentials
+          description: Invalid email/password
   /reset-password/:
     post:
       description: |
-        Create a reset password request. Sends an email with a link to reset password. Reset password
-        requests are purged from the database after 1 day.
+        Create a reset password request. Sends an email with a link to reset password. Reset
+        password requests are purged from the database after some time (1 day).
       parameters:
-        - description: Reset password data
+        - description: Reset password input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/ResetPassword"
+            $ref: "#/definitions/INResetPassword"
       produces:
         - application/json
       responses:
@@ -137,36 +143,40 @@ paths:
         must match the email in the pending reset password request data. Returns a session
         token.
       parameters:
-        - description: New password data
+        - description: New password input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/NewPassword"
+            $ref: "#/definitions/INNewPassword"
       produces:
         - application/json
       responses:
         "200":
-          description: Token.
+          description: New password output data
           schema:
-            $ref: "#/definitions/Token"
+            $ref: "#/definitions/OUTNewPassword"
+        "400":
+          description: Invalid data
         "401":
           description: Email does not match the email in the request
         "404":
           description: Password reset request not found
         "410":
-          description: User matching email not found
+          description: User with email not found
   /auth/account/:
     get:
       description: |
         Get account data.
+      security:
+        - ApiKeyAuth: []
       produces:
         - application/json
       responses:
         "200":
-          description: Account data
+          description: Account output data
           schema:
-            $ref: "#/definitions/Account"
+            $ref: "#/definitions/OUTAccount"
         "401":
           description: Invalid token
         "410":
@@ -174,20 +184,22 @@ paths:
     put:
       description: |
         Update account data.
+      security:
+        - ApiKeyAuth: []
       parameters:
-        - description: Update account data
+        - description: Update account input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Account"
+            $ref: "#/definitions/INAccount"
       produces:
         - application/json
       responses:
         "200":
           description: Account data updated
           schema:
-            $ref: "#/definitions/Account"
+            $ref: "#/definitions/OUTAccount"
         "400":
           description: Invalid data
         "401":
@@ -197,13 +209,15 @@ paths:
     delete:
       description: |
         Delete account.
+      security:
+        - ApiKeyAuth: []
       parameters:
-        - description: Delete account data
+        - description: Delete account input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/DeleteAccount"
+            $ref: "#/definitions/INDeleteAccount"
       produces:
         - application/json
       responses:
@@ -221,13 +235,15 @@ paths:
     get:
       description: |
         Get profile data.
+      security:
+        - ApiKeyAuth: []
       produces:
         - application/json
       responses:
         "200":
-          description: Account data
+          description: Profile output data
           schema:
-            $ref: "#/definitions/Profile"
+            $ref: "#/definitions/OUTProfile"
         "401":
           description: Invalid token
         "410":
@@ -235,20 +251,22 @@ paths:
     put:
       description: |
         Update profile data.
+      security:
+        - ApiKeyAuth: []
       parameters:
-        - description: Update profile data
+        - description: Update profile input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Profile"
+            $ref: "#/definitions/INProfile"
       produces:
         - application/json
       responses:
         "200":
           description: Profile data updated
           schema:
-            $ref: "#/definitions/Profile"
+            $ref: "#/definitions/OUTProfile"
         "400":
           description: Invalid data
         "401":
@@ -259,13 +277,15 @@ paths:
     post:
       description: |
         Update password.
+      security:
+        - ApiKeyAuth: []
       parameters:
-        - description: Update password data
+        - description: Update password input data
           in: body
           name: data
           required: true
           schema:
-            $ref: "#/definitions/Password"
+            $ref: "#/definitions/INPassword"
       produces:
         - application/json
       responses:
@@ -302,18 +322,25 @@ paths:
           description: Category
       responses:
         "200":
-          description: Pending
+          description: Get pending output data
           schema:
-            $ref: "#/definitions/DebugGetPending"
+            $ref: "#/definitions/OUTDebugGetPending"
 definitions:
-  JoinCheck:
+  INJoinCheck:
     type: object
     properties:
       email:
         type: string
     required:
       - email
-  Join:
+  OUTJoinCheck:
+    type: object
+    properties:
+      email:
+        type: string
+    required:
+      - email
+  INJoin:
     type: object
     properties:
       name:
@@ -330,7 +357,7 @@ definitions:
       - name
       - email
       - password
-  JoinActivate:
+  INJoinActivate:
     type: object
     properties:
       id:
@@ -343,7 +370,20 @@ definitions:
       - id
       - email
       - password
-  Signin:
+  OUTJoinActivate:
+    type: object
+    properties:
+      name:
+        type: string
+      email:
+        type: string
+      profile:
+        type: object
+      token:
+        type: string
+      extra:
+        type: object
+  INSignin:
     type: object
     properties:
       email:
@@ -353,27 +393,18 @@ definitions:
     required:
       - email
       - password
-  JoinToken:
+  OUTSignin:
     type: object
     properties:
       name:
         type: string
       email:
         type: string
-      token:
-        type: string
-      extra:
+      profile:
         type: object
-  Token:
-    type: object
-    properties:
-      name:
-        type: string
-      email:
-        type: string
       token:
         type: string
-  ResetPassword:
+  INResetPassword:
     type: object
     properties:
       email:
@@ -382,7 +413,7 @@ definitions:
         type: string
     required:
       - email
-  NewPassword:
+  INNewPassword:
     type: object
     properties:
       id:
@@ -395,14 +426,49 @@ definitions:
       - id
       - email
       - password
-  Account:
+  OUTNewPassword:
     type: object
     properties:
       name:
         type: string
-  Profile:
+      email:
+        type: string
+      profile:
+        type: object
+      token:
+        type: string
+  INAccount:
     type: object
-  Password:
+    properties:
+      name:
+        type: string
+  OUTAccount:
+    type: object
+    properties:
+      name:
+        type: string
+  INDeleteAccount:
+    type: object
+    properties:
+      password:
+        type: string
+    required:
+      - password
+  INProfile:
+    type: object
+    properties:
+      data:
+        type: object
+    required:
+      - data
+  OUTProfile:
+    type: object
+    properties:
+      data:
+        type: object
+    required:
+      - data
+  INPassword:
     type: object
     properties:
       password:
@@ -412,14 +478,7 @@ definitions:
     required:
       - password
       - newPassword
-  DeleteAccount:
-    type: object
-    properties:
-      password:
-        type: string
-    required:
-      - password
-  DebugGetPending:
+  OUTDebugGetPending:
     type: object
     properties:
       pending:

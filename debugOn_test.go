@@ -33,8 +33,8 @@ func TestDebugReset(t *testing.T) {
 
 	_ = addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
 	user, _ := addUserWithSession(t, "John Doe", "johndöe@example.com", "password1234")
+	updateProfile(t, user, map[string]any{})
 	addPendingResetPassword(t, "johndöe@example.com")
-	addProfile(t, user, map[string]any{})
 
 	assertUserCount(t, 1)
 	assertProfileCount(t, 1)
