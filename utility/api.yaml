@@ -22,6 +22,13 @@ securityDefinitions:
     type: apiKey
     in: header
     name: Token
+tags:
+  - name: public
+    description: Public API
+  - name: authorized
+    description: Authorized API
+  - name: debug
+    description: Debug API
 paths:
   /join/check:
     post:
@@ -45,6 +52,8 @@ paths:
           description: Invalid data
         "409":
           description: Account not available
+      tags:
+        - public
   /join/:
     post:
       description: |
@@ -66,6 +75,8 @@ paths:
           description: Invalid data
         "409":
           description: Account not available
+      tags:
+        - public
   /join/activate:
     post:
       description: |
@@ -93,6 +104,8 @@ paths:
           description: Invalid email/password
         "404":
           description: Join request not found
+      tags:
+        - public
   /signin/:
     post:
       description: |
@@ -115,6 +128,8 @@ paths:
           description: Invalid data
         "401":
           description: Invalid email/password
+      tags:
+        - public
   /reset-password/:
     post:
       description: |
@@ -136,6 +151,8 @@ paths:
           description: Invalid data
         "404":
           description: Unknown email
+      tags:
+        - public
   /reset-password/new:
     post:
       description: |
@@ -164,6 +181,8 @@ paths:
           description: Password reset request not found
         "410":
           description: User with email not found
+      tags:
+        - public
   /auth/account/:
     get:
       description: |
@@ -181,6 +200,8 @@ paths:
           description: Invalid token
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
     put:
       description: |
         Update account data.
@@ -206,6 +227,8 @@ paths:
           description: Invalid token
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
     delete:
       description: |
         Delete account.
@@ -231,6 +254,8 @@ paths:
           description: Incorrect password
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
   /auth/profile/:
     get:
       description: |
@@ -248,6 +273,8 @@ paths:
           description: Invalid token
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
     put:
       description: |
         Update profile data.
@@ -273,6 +300,8 @@ paths:
           description: Invalid token
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
   /auth/password:
     post:
       description: |
@@ -299,6 +328,8 @@ paths:
           description: Incorrect password
         "410":
           description: Failed, use gone?
+      tags:
+        - authorized
   /debug/reset:
     post:
       description: |
@@ -308,6 +339,8 @@ paths:
       responses:
         "200":
           description: Database reset
+      tags:
+        - debug
   /debug/pending:
     get:
       description: |
@@ -325,6 +358,8 @@ paths:
           description: Get pending output data
           schema:
             $ref: "#/definitions/OUTDebugGetPending"
+      tags:
+        - debug
 definitions:
   INJoinCheck:
     type: object
@@ -450,9 +485,12 @@ definitions:
   INDeleteAccount:
     type: object
     properties:
+      email:
+        type: string
       password:
         type: string
     required:
+      - email
       - password
   INProfile:
     type: object

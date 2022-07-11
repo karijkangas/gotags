@@ -587,6 +587,7 @@ func (a *GoTags) updateAccount(c *gin.Context) {
 //
 func (a *GoTags) deleteAccount(c *gin.Context) {
 	var d struct {
+		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.BindJSON(&d); err != nil {
@@ -596,16 +597,17 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 	password := d.Password
 	user := c.GetInt("user")
 
+	var email string
 	var passwordHash string
 	row := a.pool.QueryRow(
 		context.Background(),
-		`SELECT password_hash FROM users WHERE id = $1;`,
+		`SELECT email, password_hash FROM users WHERE id = $1;`,
 		user)
-	err := row.Scan(&passwordHash)
+	err := row.Scan(&email, &passwordHash)
 
 	// validate password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
-	if err != nil {
+	if email != d.Email || err != nil {
 		c.Status(http.StatusConflict)
 		return
 	}

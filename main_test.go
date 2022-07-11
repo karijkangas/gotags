@@ -1427,6 +1427,7 @@ func TestDeleteAccount(t *testing.T) {
 		password)
 
 	d := map[string]string{
+		"email":    email,
 		"password": password,
 	}
 
@@ -1452,17 +1453,22 @@ func TestDeleteAccountFails(t *testing.T) {
 
 	p := paths["auth+account"]
 	// Test no token
-	d := map[string]string{"password": password}
+	d := map[string]string{"email": email, "password": password}
 	response := doDelete(t, p, []byte(doMarshall(t, d)), "")
 	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// Test no password
-	d = map[string]string{}
+	d = map[string]string{"email": email}
 	response = doDelete(t, p, []byte(doMarshall(t, d)), session)
 	checkResponseCode(t, response, http.StatusBadRequest, "#1")
 
-	// Test invalid password
-	d = map[string]string{"password": "1234password"}
+	// Test incorrect email
+	d = map[string]string{"email": "johnsmith@example.com", "password": password}
+	response = doDelete(t, p, []byte(doMarshall(t, d)), session)
+	checkResponseCode(t, response, http.StatusConflict, "#2")
+
+	// Test incorrect password
+	d = map[string]string{"email": email, "password": "1234password"}
 	response = doDelete(t, p, []byte(doMarshall(t, d)), session)
 	checkResponseCode(t, response, http.StatusConflict, "#2")
 
@@ -1488,10 +1494,12 @@ func TestDeleteAccountInvalid(t *testing.T) {
 	var data = [...]testData{
 		{``, 400},
 		{`{`, 400},
-		{`{}`, 400},                // no data
-		{`{"foo": 123}`, 400},      // no data
-		{`{"password": 123}`, 400}, // invalid password
-		{`{"password": ""}`, 400},  // empty password
+		{`{}`, 400},           // no data
+		{`{"foo": 123}`, 400}, // no data
+		{`{"email": 123, "password": "password1234"}`, 400},        // invalid email
+		{`{"email": "", "password": "password1234"}`, 400},         // empty email
+		{`{"email": "johndoe@example.com" "password": 1234}`, 400}, // invalid password
+		{`{"email": "johndoe@example.com" "password": ""}`, 400},   // empty password
 	}
 
 	p := paths["auth+account"]
