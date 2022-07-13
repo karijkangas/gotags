@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -175,7 +176,20 @@ func getPendingPasswordResets(t *testing.T) (result []map[string]any) {
 	return getPending(t, "reset_password")
 }
 
-func assertPendingCount(t *testing.T, category string, want int) {
+func assertPendingCount(t *testing.T, want int) {
+	c := context.Background()
+	var count int
+	err := app.pool.QueryRow(c,
+		fmt.Sprintf(`SELECT COUNT(id) FROM pending;`)).Scan(&count)
+	if err != nil {
+		t.Fatalf("Query failed: %s.", err)
+	}
+	if count != want {
+		t.Fatalf("Counting pending. Got %d. Want %d", count, want)
+	}
+}
+
+func assertPendingCategoryCount(t *testing.T, category string, want int) {
 	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(c,
@@ -189,10 +203,10 @@ func assertPendingCount(t *testing.T, category string, want int) {
 }
 
 func assertPendingJoinCount(t *testing.T, want int) {
-	assertPendingCount(t, "join", want)
+	assertPendingCategoryCount(t, "join", want)
 }
 func assertPendingResetPasswordCount(t *testing.T, want int) {
-	assertPendingCount(t, "reset_password", want)
+	assertPendingCategoryCount(t, "reset_password", want)
 }
 
 func addUser(t *testing.T, name, email, password string) int {
@@ -339,6 +353,51 @@ func compareProfiles(t *testing.T, got, want map[string]any) {
 	if gots != wants {
 		t.Fatalf("Profiles do not match: Got %s. Want %s", gots, wants)
 	}
+}
+
+func setLimits(t *testing.T, pending, sessions int) {
+	c := context.Background()
+	_, err := app.pool.Exec(c,
+		`UPDATE limits SET pending = $1, sessions = $2 WHERE id=1;`, pending, sessions)
+	if err != nil {
+		t.Fatalf("Query failed: %s.", err)
+	}
+}
+
+func resetLimits(t *testing.T) {
+	c := context.Background()
+	_, err := app.pool.Exec(c,
+		`UPDATE limits SET pending = max_pending, sessions = max_sessions WHERE id=1;`)
+	if err != nil {
+		t.Fatalf("Query failed: %s.", err)
+	}
+}
+
+func modifySession(t *testing.T, session string, modifiedAt time.Time) {
+	_, err := app.pool.Exec(
+		context.Background(),
+		`UPDATE sessions SET modified_at = $1 WHERE id = $2;`, modifiedAt, session)
+	if err != nil {
+		t.Fatalf("Query failed: %s", err)
+	}
+}
+
+func getTTLs(t *testing.T) (pending, sessions time.Time) {
+	var p, s int
+	var unit string
+	fmt.Sscanf(pendingTTL, "%d %s", &p, &unit)
+
+	if unit != "days" {
+		t.Fatalf("Unexpected unit for pendingTTL. Got %s. Want days", unit)
+	}
+	fmt.Sscanf(sessionTTL, "%d %s", &s, &unit)
+	if unit != "days" {
+		t.Fatalf("Unexpected unit for sessionTTL. Got %s. Want days", unit)
+	}
+
+	pending = time.Now().AddDate(0, 0, -p)
+	sessions = time.Now().AddDate(0, 0, -s)
+	return
 }
 
 // ******************************************************************
@@ -1276,6 +1335,122 @@ func TestResetPasswordFlow(t *testing.T) {
 }
 
 // ******************************************************************
+func TestRenewSession(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	_, sessions := getTTLs(t)
+	olds := sessions.AddDate(0, 0, -1)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user, session1 := addUserWithSession(t,
+		name,
+		email,
+		password)
+	session2 := addSession(t, user)
+
+	assertSessionCount(t, 2)
+	modifySession(t, session1, olds)
+	modifySession(t, session2, olds)
+
+	p := paths["auth+session"]
+	response := doPost(t, p, nil, session1)
+	checkResponseCode(t, response, http.StatusNoContent, "#0")
+
+	app.cleanupDB()
+	assertSessionCount(t, 1)
+
+	response = doPost(t, p, nil, session1)
+	checkResponseCode(t, response, http.StatusNoContent, "#0")
+
+	response = doPost(t, p, nil, session2)
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+}
+
+func TestRenewSessionFails(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	_, sessions := getTTLs(t)
+	olds := sessions.AddDate(0, 0, -1)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	_, session := addUserWithSession(t,
+		name,
+		email,
+		password)
+
+	assertSessionCount(t, 1)
+	modifySession(t, session, olds)
+
+	app.cleanupDB()
+	assertSessionCount(t, 0)
+
+	// invalid session
+	p := paths["auth+session"]
+	response := doPost(t, p, nil, "")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+
+	// cleaned up session
+	response = doPost(t, p, nil, session)
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+}
+
+// ******************************************************************
+func TestDeleteSession(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	_, session := addUserWithSession(t,
+		name,
+		email,
+		password)
+	assertSessionCount(t, 1)
+
+	p := paths["auth+session"]
+	response := doDelete(t, p, nil, session)
+	checkResponseCode(t, response, http.StatusNoContent, "#0")
+
+	assertSessionCount(t, 0)
+}
+
+func TestDeleteSessionFails(t *testing.T) {
+	clearTables(t, "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	_, session := addUserWithSession(t,
+		name,
+		email,
+		password)
+	assertSessionCount(t, 1)
+
+	p := paths["auth+session"]
+	response := doDelete(t, p, nil, session)
+	checkResponseCode(t, response, http.StatusNoContent, "#0")
+
+	assertSessionCount(t, 0)
+
+	// invalid session
+	response = doDelete(t, p, nil, "")
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+
+	// already deleted
+	response = doDelete(t, p, nil, session)
+	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+
+}
+
+// ******************************************************************
 func TestGetAccount(t *testing.T) {
 	clearTables(t, "users", "sessions")
 
@@ -1802,4 +1977,202 @@ func TestUpdatePasswordInvalid(t *testing.T) {
 		checkResponseCode(t, response, d.code, tag)
 		checkResponseBody(t, response, "", tag)
 	}
+}
+
+// ******************************************************************
+func TestCleanupDB(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	app.cleanupDB()
+
+	user, _ := addUserWithSession(t, name, email, password)
+	addPendingJoin(t, name, email, password)
+
+	assertPendingCount(t, 1)
+	assertSessionCount(t, 1)
+
+	oldp, olds := getTTLs(t)
+
+	oldp = oldp.AddDate(0, 0, -1)
+	var pid string
+	err := app.pool.QueryRow(context.Background(), `INSERT INTO pending (email, category, created_at, modified_at) VALUES ($1, 'join', $2, $2) RETURNING id;`, email, oldp).Scan(&pid)
+	if err != nil {
+		t.Fatalf("Query failed: %s", err)
+	}
+
+	olds = olds.AddDate(0, 0, -1)
+	var sid string
+	err = app.pool.QueryRow(context.Background(), `INSERT INTO sessions (user_id, created_at, modified_At) VALUES ($1, $2, $2) RETURNING id;`, user, olds).Scan(&sid)
+	if err != nil {
+		t.Fatalf("Query failed: %s", err)
+	}
+
+	assertPendingCount(t, 2)
+	assertSessionCount(t, 2)
+
+	app.cleanupDB()
+
+	assertPendingCount(t, 1)
+	assertSessionCount(t, 1)
+}
+
+// ******************************************************************
+func TestPendingJoinLimit(t *testing.T) {
+	clearTables(t, "pending", "users")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	extra := map[string]any{"url": "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"}
+	lang := "en"
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addPendingJoin(t, name, email, password)
+	}
+	assertPendingCount(t, limit)
+
+	d := map[string]any{
+		"name":     name,
+		"email":    email,
+		"password": password,
+		"lang":     lang,
+		"extra":    extra,
+	}
+	p := paths["join"]
+	response := doPost(t, p, []byte(doMarshall(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+
+	assertPendingCount(t, limit)
+}
+
+func TestPendingResetPasswordLimit(t *testing.T) {
+	clearTables(t, "pending", "users")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	addUser(t, name, email, password)
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addPendingResetPassword(t, email)
+	}
+	assertPendingCount(t, limit)
+
+	d := map[string]string{
+		"email": email,
+		"lang":  "en",
+	}
+	p := paths["resetPassword"]
+	response := doPost(t, p, []byte(doMarshall(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+
+	assertPendingCount(t, limit)
+
+	clearTables(t, "pending")
+}
+
+func TestSessionLimitSignin(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addSession(t, user)
+	}
+	assertSessionCount(t, limit)
+
+	d := map[string]string{
+		"email":    email,
+		"password": password,
+	}
+
+	p := paths["signin"]
+	response := doPost(t, p, []byte(doMarshall(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+
+	assertSessionCount(t, limit)
+}
+
+func TestSessionLimitJoin(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	id := addPendingJoin(t, name, email, password)
+	user := addUser(t, name, email, password)
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addSession(t, user)
+	}
+	assertSessionCount(t, limit)
+
+	d := map[string]string{
+		"ID":       id,
+		"email":    email,
+		"password": password,
+	}
+	p := paths["joinActivate"]
+	response := doPost(t, p, []byte(doMarshall(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+
+	assertSessionCount(t, limit)
+}
+
+func TestSessionLimitResetPassword(t *testing.T) {
+	clearTables(t, "pending", "users", "sessions")
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	newPassword := "1234password"
+
+	user := addUser(t, name, email, password)
+	id := addPendingResetPassword(t, email)
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addSession(t, user)
+	}
+	assertSessionCount(t, limit)
+
+	d := map[string]string{
+		"id":       id,
+		"email":    email,
+		"password": newPassword,
+	}
+	p := paths["newPassword"]
+	response := doPost(t, p, []byte(doMarshall(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+
+	assertSessionCount(t, limit)
 }

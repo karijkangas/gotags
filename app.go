@@ -19,7 +19,8 @@ import (
 const (
 	passwordHashCost = bcrypt.DefaultCost
 	cleanupDBTimeUTC = "04:00"
-	verificationsTTL = "'1 day'"
+	pendingTTL       = "1 days"
+	sessionTTL       = "30 days"
 )
 
 type mailer func(email, url, lang string) error
@@ -41,6 +42,7 @@ var paths = map[string]string{
 	"resetPassword": "/api/reset-password",
 	"newPassword":   "/api/reset-password/new",
 	"auth":          "",
+	"auth+session":  "/api/auth/session",
 	"auth+account":  "/api/auth/account",
 	"auth+profile":  "/api/auth/profile",
 	"auth+password": "/api/auth/password",
@@ -59,21 +61,23 @@ type GoTags struct {
 
 func (a *GoTags) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token, ok := c.Request.Header["Token"]
+		tokens, ok := c.Request.Header["Token"]
 		if !ok {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		token := tokens[0]
 		var user int
 		err := a.pool.QueryRow(
 			context.Background(),
 			`SELECT user_id FROM sessions WHERE id = $1;`,
-			token[0]).Scan(&user)
+			token).Scan(&user)
 
 		if err != nil {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		c.Set("token", token)
 		c.Set("user", user)
 		c.Next()
 	}
@@ -97,6 +101,8 @@ func (a *GoTags) initialize(databaseURL string) {
 	authorized := router.Group(paths["auth"])
 	authorized.Use(a.auth())
 	{
+		authorized.POST(paths["auth+session"], a.renewSession)
+		authorized.DELETE(paths["auth+session"], a.deleteSession)
 		authorized.GET(paths["auth+account"], a.getAccount)
 		authorized.PUT(paths["auth+account"], a.updateAccount)
 		authorized.DELETE(paths["auth+account"], a.deleteAccount)
@@ -124,8 +130,15 @@ func (a *GoTags) run(server string) {
 
 func (a *GoTags) cleanupDB() {
 	log.Printf("Running database cleanup")
-	a.pool.Exec(context.Background(),
-		fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval %s;`, verificationsTTL))
+
+	b := &pgx.Batch{}
+	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE modified_at < now() - interval '%s';`, pendingTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%s';`, sessionTTL))
+	r := a.pool.SendBatch(context.Background(), b)
+
+	r.Exec()
+	r.Exec()
+	r.Close()
 }
 
 //
@@ -173,7 +186,7 @@ func (a *GoTags) signin(c *gin.Context) {
 		user)
 	err := row.Scan(&token)
 	if err != nil {
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusTooManyRequests)
 		return
 	}
 
@@ -236,7 +249,7 @@ func (a *GoTags) join(c *gin.Context) {
 		email, data)
 	err = row.Scan(&uuid)
 	if err != nil {
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusTooManyRequests)
 		return
 	}
 
@@ -304,14 +317,22 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	id := d.ID
 	password := d.Password
 
-	// get matching pending join
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background()) // safe to call after commit
+
+	// delete matching pending join, get email and data
 	var email string
 	data := map[string]any{}
-	row := a.pool.QueryRow(
+	row := tx.QueryRow(
 		context.Background(),
-		`SELECT email, data FROM pending WHERE category = 'join' AND id = $1;`,
+		`DELETE FROM pending WHERE id = $1 AND category = 'join' RETURNING email, data;`,
 		id)
-	err := row.Scan(&email, &data)
+	err = row.Scan(&email, &data)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
@@ -326,14 +347,6 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 		return
 	}
 	extra := data["extra"]
-
-	// do transaction: add user, remove pending, add session and profile
-	tx, err := a.pool.Begin(context.Background())
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback(context.Background()) // safe to call after commit
 
 	// add user
 	var user int
@@ -354,11 +367,9 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	profile := defaultProfile()
 	var newProfile map[string]any
 
-	// batched: remove pending join, create a session and a profile
-	// use existing profile, if any
+	// insert session and profile
 	var token string
 	b := &pgx.Batch{}
-	b.Queue(`DELETE FROM pending WHERE email = $1 AND category = 'join';`, email)
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
 	b.Queue(`WITH ins AS(
 				INSERT INTO profiles (id, data) 
@@ -372,11 +383,15 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
-	_, err1 := r.Exec()                    // delete pending
 	err2 := r.QueryRow().Scan(&token)      // insert session
 	err3 := r.QueryRow().Scan(&newProfile) // insert profile
 
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err2 != nil {
+		c.Status(http.StatusTooManyRequests)
+		return
+	}
+
+	if err3 != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -426,7 +441,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 		email)
 	err = row.Scan(&uuid)
 	if err != nil {
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusTooManyRequests)
 		return
 	}
 
@@ -465,13 +480,21 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	id := d.ID
 	password := d.Password
 
-	// find matching pending password reset
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background()) // safe to call after commit
+
+	// delete matching pending password reset, get email
 	var email string
-	row := a.pool.QueryRow(
+	row := tx.QueryRow(
 		context.Background(),
-		`SELECT email FROM pending WHERE category = 'reset_password' AND id = $1;`,
+		`DELETE FROM pending WHERE id = $1 AND category = 'reset_password' RETURNING email;`,
 		id)
-	err := row.Scan(&email)
+	err = row.Scan(&email)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
@@ -488,34 +511,21 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		return
 	}
 
-	// do as transaction: delete pending, update user password, add session and get profile
-	tx, err := a.pool.Begin(context.Background())
-	defer tx.Rollback(context.Background()) // safe to call after commit
-
-	// delete request and update user password
-	b := &pgx.Batch{}
-	b.Queue(`DELETE FROM pending WHERE category = 'reset_password' AND id = $1;`, id)
-	b.Queue(`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, name;`, passwordHash, email)
-	r := tx.SendBatch(context.Background(), b)
-	defer r.Close()
-
+	// update password hash, get user id and name
 	var user int
 	var name string
-	// var profile map[string]any
-
-	r.Exec()                              // delete, ignore errors
-	err = r.QueryRow().Scan(&user, &name) // update, check user gone
+	err = tx.QueryRow(context.Background(), `UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, name;`, passwordHash, email).Scan(&user, &name)
 
 	if err != nil {
 		c.Status(http.StatusGone)
 		return
 	}
-	r.Close()
 
-	b = &pgx.Batch{}
+	// creater session and profile
+	b := &pgx.Batch{}
 	b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
 	b.Queue(`SELECT data FROM profiles WHERE id = $1;`, user)
-	r = tx.SendBatch(context.Background(), b)
+	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
 	var token string
@@ -524,13 +534,16 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	err1 := r.QueryRow().Scan(&token)
 	err2 := r.QueryRow().Scan(&profile)
 
-	if err1 != nil || err2 != nil {
+	if err1 != nil {
+		c.Status(http.StatusTooManyRequests)
+		return
+	}
+	if err2 != nil {
 		c.Status(http.StatusGone)
 		return
 	}
 	r.Close()
 
-	// commit transaction
 	err = tx.Commit(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
@@ -538,6 +551,32 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "profile": profile, "token": token})
+}
+
+//
+func (a *GoTags) renewSession(c *gin.Context) {
+	token := c.GetString("token")
+
+	_, err := a.pool.Exec(
+		context.Background(),
+		`UPDATE sessions SET modified_at = $1 WHERE id = $2;`,
+		time.Now(), token)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+//
+func (a *GoTags) deleteSession(c *gin.Context) {
+	token := c.GetString("token")
+
+	a.pool.Exec(
+		context.Background(),
+		`DELETE FROM sessions WHERE id = $1;`,
+		token)
+	c.Status(http.StatusNoContent)
 }
 
 //

@@ -75,6 +75,8 @@ paths:
           description: Invalid data
         "409":
           description: Account not available
+        "429":
+          description: Too many requests
       tags:
         - public
   /join/activate:
@@ -127,7 +129,9 @@ paths:
         "400":
           description: Invalid data
         "401":
-          description: Invalid email/password
+          description: Incorrect email/password
+        "429":
+          description: Too many sessions
       tags:
         - public
   /reset-password/:
@@ -151,6 +155,8 @@ paths:
           description: Invalid data
         "404":
           description: Unknown email
+        "429":
+          description: Too many requests
       tags:
         - public
   /reset-password/new:
@@ -181,8 +187,41 @@ paths:
           description: Password reset request not found
         "410":
           description: User with email not found
+        "429":
+          description: Too many sessions
       tags:
         - public
+  /auth/session:
+    post:
+      description: |
+        Renew session.
+      security:
+        - ApiKeyAuth: []
+      produces:
+        - application/json
+      responses:
+        "204":
+          description: Session renewed
+        "401":
+          description: Invalid token
+        "410":
+          description: Failed, session expired?
+      tags:
+        - authorized
+    delete:
+      description: |
+        Delete session.
+      security:
+        - ApiKeyAuth: []
+      produces:
+        - application/json
+      responses:
+        "204":
+          description: Session deleted
+        "401":
+          description: Invalid token
+      tags:
+        - authorized
   /auth/account/:
     get:
       description: |
@@ -244,7 +283,7 @@ paths:
       produces:
         - application/json
       responses:
-        "200":
+        "204":
           description: Account deleted
         "400":
           description: Invalid password
