@@ -192,9 +192,9 @@ paths:
       tags:
         - public
   /auth/session:
-    post:
+    patch:
       description: |
-        Renew session.
+        Renew session, a ping. (nginx rate-limited?)
       security:
         - ApiKeyAuth: []
       produces:
@@ -210,7 +210,7 @@ paths:
         - authorized
     delete:
       description: |
-        Delete session.
+        Delete session, sign- or logout.
       security:
         - ApiKeyAuth: []
       produces:

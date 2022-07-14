@@ -42,10 +42,10 @@ var paths = map[string]string{
 	"resetPassword": "/api/reset-password",
 	"newPassword":   "/api/reset-password/new",
 	"auth":          "",
-	"auth+session":  "/api/auth/session",
 	"auth+account":  "/api/auth/account",
 	"auth+profile":  "/api/auth/profile",
 	"auth+password": "/api/auth/password",
+	"auth+session":  "/api/auth/session",
 	"auth+tags":     "/api/auth/tags/:id",
 	//
 	"debug+reset":   "/debug/reset",
@@ -101,7 +101,7 @@ func (a *GoTags) initialize(databaseURL string) {
 	authorized := router.Group(paths["auth"])
 	authorized.Use(a.auth())
 	{
-		authorized.POST(paths["auth+session"], a.renewSession)
+		authorized.PATCH(paths["auth+session"], a.renewSession)
 		authorized.DELETE(paths["auth+session"], a.deleteSession)
 		authorized.GET(paths["auth+account"], a.getAccount)
 		authorized.PUT(paths["auth+account"], a.updateAccount)
@@ -748,7 +748,9 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 	}
 
 	// update password hash
-	_, err = a.pool.Exec(context.Background(), `UPDATE users SET password_hash = $1 WHERE id = $2;`, newHash, user)
+	_, err = a.pool.Exec(
+		context.Background(),
+		`UPDATE users SET password_hash = $1 WHERE id = $2;`, newHash, user)
 	if err != nil {
 		c.Status(http.StatusGone)
 		return

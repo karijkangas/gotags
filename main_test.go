@@ -1339,7 +1339,7 @@ func TestRenewSession(t *testing.T) {
 	clearTables(t, "users", "sessions")
 
 	_, sessions := getTTLs(t)
-	olds := sessions.AddDate(0, 0, -1)
+	olds := sessions.AddDate(0, 0, -2)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -1356,24 +1356,24 @@ func TestRenewSession(t *testing.T) {
 	modifySession(t, session2, olds)
 
 	p := paths["auth+session"]
-	response := doPost(t, p, nil, session1)
+	response := doMethod(t, "PATCH", p, nil, session1)
 	checkResponseCode(t, response, http.StatusNoContent, "#0")
 
 	app.cleanupDB()
 	assertSessionCount(t, 1)
 
-	response = doPost(t, p, nil, session1)
-	checkResponseCode(t, response, http.StatusNoContent, "#0")
+	response = doMethod(t, "PATCH", p, nil, session1)
+	checkResponseCode(t, response, http.StatusNoContent, "#1")
 
-	response = doPost(t, p, nil, session2)
-	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
+	response = doMethod(t, "PATCH", p, nil, session2)
+	checkResponseCode(t, response, http.StatusUnauthorized, "#2")
 }
 
 func TestRenewSessionFails(t *testing.T) {
 	clearTables(t, "users", "sessions")
 
 	_, sessions := getTTLs(t)
-	olds := sessions.AddDate(0, 0, -1)
+	olds := sessions.AddDate(0, 0, -2)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -1392,11 +1392,12 @@ func TestRenewSessionFails(t *testing.T) {
 
 	// invalid session
 	p := paths["auth+session"]
-	response := doPost(t, p, nil, "")
+	response := doMethod(t, "PATCH", p, nil, "")
 	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 
 	// cleaned up session
 	response = doPost(t, p, nil, session)
+	response = doMethod(t, "PATCH", p, nil, session)
 	checkResponseCode(t, response, http.StatusUnauthorized, "#0")
 }
 
