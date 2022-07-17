@@ -28,39 +28,39 @@ type pending struct {
 
 // ******************************************************************
 
-func TestDebugReset(t *testing.T) {
-	clearTables(t, "pending", "users", "sessions", "profiles")
+func TestDebugAPIReset(t *testing.T) {
+	clearTables(t)
 
-	_ = addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
-	user, _ := addUserWithSession(t, "John Doe", "johndöe@example.com", "password1234")
+	addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
+	user := addUser(t, "John Doe", "johndöe@example.com", "password1234")
 	updateProfile(t, user, map[string]any{})
+	addSession(t, user)
 	addPendingResetPassword(t, "johndöe@example.com")
 
+	assertPendingJoinCount(t, 1)
 	assertUserCount(t, 1)
 	assertProfileCount(t, 1)
 	assertSessionCount(t, 1)
-	assertPendingJoinCount(t, 1)
 	assertPendingResetPasswordCount(t, 1)
 
-	p := paths["debug+reset"]
-	response := doPost(t, p, nil, "")
-	checkResponseCode(t, response, http.StatusOK, p)
-	checkResponseBody(t, response, "", p)
+	response := doPost(t, paths["debug_reset"], nil, "")
+	checkResponseCode(t, response, http.StatusOK)
+	checkResponseBody(t, response, "")
 
+	assertPendingJoinCount(t, 0)
 	assertUserCount(t, 0)
 	assertProfileCount(t, 0)
 	assertSessionCount(t, 0)
-	assertPendingJoinCount(t, 0)
 	assertPendingResetPasswordCount(t, 0)
 
-	user, _ = addUserWithSession(t, "John Doe", "johndöe@example.com", "password1234")
+	user = addUser(t, "John Doe", "johndöe@example.com", "password1234")
 	if user != 1 {
-		t.Fatalf("User id serial not reset: %d", user)
+		t.Fatalf("user id serial not reset: %d", user)
 	}
 }
 
-func TestDebugGetPendingJoin(t *testing.T) {
-	clearTables(t, "pending", "users")
+func TestDebugAPIGetPendingJoin(t *testing.T) {
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -76,51 +76,46 @@ func TestDebugGetPendingJoin(t *testing.T) {
 		"extra":    extra,
 	}
 
-	p := paths["join"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusCreated, p)
-	checkResponseBody(t, response, "", p)
+	response := doPost(t, paths["join"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusCreated)
+	checkResponseBody(t, response, "")
 
 	category := "join"
-	p = paths["debug+pending"] + fmt.Sprintf("?category=%s", category)
+	p := paths["debug_pending"] + fmt.Sprintf("?category=%s", category)
 	response = doGet(t, p, "")
-	checkResponseCode(t, response, http.StatusOK, p)
+	checkResponseCode(t, response, http.StatusOK)
 
 	var out pending
-
 	err := json.Unmarshal(response.Body.Bytes(), &out)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall pending output: %s", err)
 	}
-
 	if out.Category != category || len(out.Pending) != 1 {
 		t.Fatalf("Unexpected data: %s", out)
 	}
 }
 
-func TestDebugGetPendingJoinEmpty(t *testing.T) {
-	clearTables(t, "pending", "users")
+func TestDebugAPIGetPendingJoinEmpty(t *testing.T) {
+	clearTables(t)
 
 	category := "join"
-	p := paths["debug+pending"] + fmt.Sprintf("?category=%s", category)
+	p := paths["debug_pending"] + fmt.Sprintf("?category=%s", category)
 	response := doGet(t, p, "")
-	checkResponseCode(t, response, http.StatusOK, p)
+	checkResponseCode(t, response, http.StatusOK)
 
 	var out pending
-
 	err := json.Unmarshal(response.Body.Bytes(), &out)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall pending output: %s", err)
 	}
-
 	if out.Category != category || len(out.Pending) != 0 {
 		t.Fatalf("Unexpected pending output. Got %s, %d. Want %s, %d", out.Category, len(out.Pending), category, 0)
 
 	}
 }
 
-func TestDebugGetPendingJoinMultiple(t *testing.T) {
-	clearTables(t, "pending", "users")
+func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
+	clearTables(t)
 
 	url := "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"
 	value := 42
@@ -146,24 +141,21 @@ func TestDebugGetPendingJoinMultiple(t *testing.T) {
 		"extra":    map[string]int{"value": value},
 	}}
 
-	p := paths["join"]
-	for i, d := range data {
-		response := doPost(t, p, []byte(doMarshall(t, d)), "")
-		tag := fmt.Sprintf("%s#%d", p, i)
-		checkResponseCode(t, response, http.StatusCreated, tag)
-		checkResponseBody(t, response, "", tag)
+	for _, d := range data {
+		response := doPost(t, paths["join"], []byte(marshallAny(t, d)), "")
+		checkResponseCode(t, response, http.StatusCreated)
+		checkResponseBody(t, response, "")
 	}
 	joins := getPendingJoins(t)
 
-	p = paths["debug+pending"] + "?category=join"
+	p := paths["debug_pending"] + "?category=join"
 	response := doGet(t, p, "")
-	checkResponseCode(t, response, http.StatusOK, p)
+	checkResponseCode(t, response, http.StatusOK)
 
 	var got pending
-
 	err := json.Unmarshal(response.Body.Bytes(), &got)
 	if err != nil {
-		t.Fatalf("Failed to unmarshall pending output: %s", err)
+		t.Fatalf("failed to unmarshall pending data: %s", err)
 	}
 
 	for i := range data {

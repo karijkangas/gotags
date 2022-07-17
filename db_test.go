@@ -8,7 +8,9 @@ import (
 
 // ******************************************************************
 func TestCleanupDB(t *testing.T) {
-	clearTables(t, "pending", "users", "sessions")
+	// TODO: test limiter
+
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -16,40 +18,70 @@ func TestCleanupDB(t *testing.T) {
 
 	app.cleanupDB()
 
-	user, _ := addUserWithSession(t, name, email, password)
-	addPendingJoin(t, name, email, password)
+	user := addUser(t, name, email, password)
+	addSession(t, user)
 
-	assertPendingCount(t, 1)
+	p1 := addPendingJoin(t, name, email, password)
+	p2 := addPendingResetPassword(t, email)
+
+	assertPendingCount(t, "*", 2)
+	assertPendingJoinCount(t, 1)
+	assertPendingResetPasswordCount(t, 1)
 	assertSessionCount(t, 1)
 
-	oldp, olds := getTTLs(t)
+	oldp, olds := fromTTLs(t, -2)
 
-	oldp = oldp.AddDate(0, 0, -1)
-	var pid string
-	err := app.pool.QueryRow(context.Background(), `INSERT INTO pending (email, category, created_at, modified_at) VALUES ($1, 'join', $2, $2) RETURNING id;`, email, oldp).Scan(&pid)
+	var pd1 string
+	err := app.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO pending (email, category, created_at) VALUES ($1, 'join', $2) RETURNING id;`,
+		email, oldp).Scan(&pd1)
 	if err != nil {
-		t.Fatalf("Query failed: %s", err)
+		t.Fatalf("query failed: %s", err)
 	}
 
-	olds = olds.AddDate(0, 0, -1)
-	var sid string
-	err = app.pool.QueryRow(context.Background(), `INSERT INTO sessions (user_id, created_at, modified_At) VALUES ($1, $2, $2) RETURNING id;`, user, olds).Scan(&sid)
+	var pd2 string
+	err = app.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO pending (email, category, created_at) VALUES ($1, 'reset_password', $2) RETURNING id;`,
+		email, oldp).Scan(&pd2)
 	if err != nil {
-		t.Fatalf("Query failed: %s", err)
+		t.Fatalf("query failed: %s", err)
 	}
 
-	assertPendingCount(t, 2)
+	var sd string
+	err = app.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO sessions (user_id, created_at, modified_At) VALUES ($1, $2, $2) RETURNING id;`,
+		user, olds).Scan(&sd)
+	if err != nil {
+		t.Fatalf("query failed: %s", err)
+	}
+
+	assertPendingJoinCount(t, 2)
+	assertPendingResetPasswordCount(t, 2)
 	assertSessionCount(t, 2)
 
 	app.cleanupDB()
 
-	assertPendingCount(t, 1)
+	assertPendingJoinCount(t, 1)
+	assertPendingResetPasswordCount(t, 1)
 	assertSessionCount(t, 1)
+
+	pp1, _, _, _, _ := getPendingJoin(t)
+	pp2, _ := getPendingResetPassword(t)
+
+	if pp1 != p1 {
+		t.Fatalf("unexpected pending join")
+	}
+	if pp2 != p2 {
+		t.Fatalf("unexpected pending reset password")
+	}
 }
 
 // ******************************************************************
 func TestPendingJoinLimit(t *testing.T) {
-	clearTables(t, "pending", "users")
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -64,7 +96,7 @@ func TestPendingJoinLimit(t *testing.T) {
 	for i := 0; i < limit; i++ {
 		addPendingJoin(t, name, email, password)
 	}
-	assertPendingCount(t, limit)
+	assertPendingJoinCount(t, limit)
 
 	d := map[string]any{
 		"name":     name,
@@ -73,15 +105,15 @@ func TestPendingJoinLimit(t *testing.T) {
 		"lang":     lang,
 		"extra":    extra,
 	}
-	p := paths["join"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+	response := doPost(t, paths["join"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests)
 
-	assertPendingCount(t, limit)
+	assertPendingJoinCount(t, limit)
+	clearTables(t)
 }
 
 func TestPendingResetPasswordLimit(t *testing.T) {
-	clearTables(t, "pending", "users")
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -96,53 +128,23 @@ func TestPendingResetPasswordLimit(t *testing.T) {
 	for i := 0; i < limit; i++ {
 		addPendingResetPassword(t, email)
 	}
-	assertPendingCount(t, limit)
+	assertPendingResetPasswordCount(t, limit)
 
 	d := map[string]string{
 		"email": email,
 		"lang":  "en",
 	}
-	p := paths["resetPassword"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+	response := doPost(t, paths["resetPassword"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests)
 
-	assertPendingCount(t, limit)
+	assertPendingResetPasswordCount(t, limit)
 
-	clearTables(t, "pending")
+	clearTables(t)
 }
 
-func TestSessionLimitSignin(t *testing.T) {
-	clearTables(t, "pending", "users", "sessions")
-
-	name := "John Doe"
-	email := "johndoe@example.com"
-	password := "password1234"
-
-	user := addUser(t, name, email, password)
-
-	limit := 4
-	setLimits(t, limit, limit)
-	defer resetLimits(t)
-
-	for i := 0; i < limit; i++ {
-		addSession(t, user)
-	}
-	assertSessionCount(t, limit)
-
-	d := map[string]string{
-		"email":    email,
-		"password": password,
-	}
-
-	p := paths["signin"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
-
-	assertSessionCount(t, limit)
-}
-
-func TestSessionLimitJoin(t *testing.T) {
-	clearTables(t, "pending", "users", "sessions")
+func TestSessionLimitJoinActivate(t *testing.T) {
+	// quite unlikely
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -165,15 +167,44 @@ func TestSessionLimitJoin(t *testing.T) {
 		"email":    email,
 		"password": password,
 	}
-	p := paths["joinActivate"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+	response := doPost(t, paths["joinActivate"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests)
 
 	assertSessionCount(t, limit)
 }
 
-func TestSessionLimitResetPassword(t *testing.T) {
-	clearTables(t, "pending", "users", "sessions")
+func TestSessionLimitSignin(t *testing.T) {
+	// simultaneous sessions in different browser sessions
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+
+	limit := 4
+	setLimits(t, limit, limit)
+	defer resetLimits(t)
+
+	for i := 0; i < limit; i++ {
+		addSession(t, user)
+	}
+	assertSessionCount(t, limit)
+
+	d := map[string]string{
+		"email":    email,
+		"password": password,
+	}
+	response := doPost(t, paths["signin"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests)
+
+	assertSessionCount(t, limit)
+}
+
+func TestSessionLimitNewPassword(t *testing.T) {
+	// quite unlikely
+	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
@@ -197,9 +228,8 @@ func TestSessionLimitResetPassword(t *testing.T) {
 		"email":    email,
 		"password": newPassword,
 	}
-	p := paths["newPassword"]
-	response := doPost(t, p, []byte(doMarshall(t, d)), "")
-	checkResponseCode(t, response, http.StatusTooManyRequests, "#0")
+	response := doPost(t, paths["newPassword"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusTooManyRequests)
 
 	assertSessionCount(t, limit)
 }

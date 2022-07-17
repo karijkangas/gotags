@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,64 +31,95 @@ func resetMailer() []queueItem {
 	return q
 }
 
-// ******************************************************************
-type signinData struct {
-	Name    string         `json:"name" binding:"required"`
-	Email   string         `json:"email" binding:"required,email"`
-	Profile map[string]any `json:"profile" binding:"required"`
-	Token   string         `json:"token" binding:"required"`
-}
-
+// data structures for API output
 type joinCheckData struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
 type joinActivateData struct {
-	Name    string         `json:"name" binding:"required"`
-	Email   string         `json:"email" binding:"required,email"`
-	Profile map[string]any `json:"profile" binding:"required"`
-	Token   string         `json:"token" binding:"required"`
-	Extra   map[string]any `json:"extra"`
+	Name  string         `json:"name" binding:"required"`
+	Email string         `json:"email" binding:"required,email"`
+	Data  userData       `json:"data" binding:"required"`
+	Token string         `json:"token" binding:"required"`
+	Extra map[string]any `json:"extra"`
+}
+
+type signinData struct {
+	Name  string   `json:"name" binding:"required"`
+	Email string   `json:"email" binding:"required,email"`
+	Data  userData `json:"data" binding:"required"`
+	Token string   `json:"token" binding:"required"`
 }
 
 type newPasswordData struct {
-	Name    string         `json:"name" binding:"required"`
-	Email   string         `json:"email" binding:"required,email"`
-	Profile map[string]any `json:"profile" binding:"required"`
-	Token   string         `json:"token" binding:"required"`
+	Name  string   `json:"name" binding:"required"`
+	Email string   `json:"email" binding:"required,email"`
+	Data  userData `json:"data" binding:"required"`
+	Token string   `json:"token" binding:"required"`
 }
 
 type accountData struct {
 	Name string `json:"name" binding:"required"`
 }
 
-type profileData struct {
-	Data map[string]any `json:"data" binding:"required"`
+type userData struct {
+	Profile profileData `json:"profile" binding:"required"`
+	Tags    [][4]string `json:"tags" binding:"required"`
 }
 
-// ******************************************************************
+type profileData map[string]any
+
+func defaultUserData() userData {
+	return userData{defaultProfile(), [][4]string{}}
+}
+
+func newUserData(profile profileData) userData {
+	d := defaultUserData()
+	d.Profile = profile
+	return d
+}
+
+func defaultProfile() profileData {
+	return map[string]any{}
+}
+
+func failPrefix(t *testing.T, depth int) string {
+	// flakey approach for printing file and line number
+	_, file, line, _ := runtime.Caller(depth + 1)
+	return fmt.Sprintf("%s (%s:%d)", t.Name(), file, line)
+}
+
 func clearTables(t *testing.T, tables ...string) {
-	c := context.Background()
-	_, err := app.pool.Exec(c, fmt.Sprintf("TRUNCATE TABLE %s CASCADE;", strings.Join(tables, ",")))
+	if len(tables) == 0 {
+		tables = []string{"pending", "limiter", "users", "profiles", "sessions"}
+	}
+	_, err := app.pool.Exec(
+		context.Background(),
+		fmt.Sprintf("TRUNCATE TABLE %s CASCADE;", strings.Join(tables, ",")))
 	if err != nil {
-		t.Fatalf("Query failed: %s", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 }
 
 func resetSequences(t *testing.T, sequences ...string) {
-	c := context.Background()
+	if len(sequences) == 0 {
+		sequences = []string{"users_id_seq", "limiter_iq_seq"}
+	}
 	for _, s := range sequences {
-		_, err := app.pool.Exec(c, fmt.Sprintf("ALTER SEQUENCE %s RESTART WITH 1;", s))
+		_, err := app.pool.Exec(
+			context.Background(),
+			fmt.Sprintf("ALTER SEQUENCE %s RESTART;", s),
+		)
 		if err != nil {
-			t.Fatalf("Query failed: %s", err)
+			t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 		}
 	}
 }
 
-func doMarshall(t *testing.T, d any) []byte {
+func marshallAny(t *testing.T, d any) []byte {
 	s, err := json.Marshal(d)
 	if err != nil {
-		t.Fatalf("JSON marshall failed: %s", err)
+		t.Fatalf("%s: JSON marshall failed: %s", failPrefix(t, 1), err)
 	}
 	return s
 }
@@ -98,10 +130,16 @@ func addToken(req *http.Request, token string) {
 	}
 }
 
+func doRequest(req *http.Request) *httptest.ResponseRecorder {
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, req)
+	return rr
+}
+
 func doGet(t *testing.T, path string, token string) *httptest.ResponseRecorder {
 	req, err := http.NewRequest("GET", path, nil)
 	if err != nil {
-		t.Fatalf("Invalid request: %s", err)
+		t.Fatalf("%s: invalid request: %s", failPrefix(t, 1), err)
 	}
 	addToken(req, token)
 	return doRequest(req)
@@ -110,7 +148,7 @@ func doGet(t *testing.T, path string, token string) *httptest.ResponseRecorder {
 func doMethod(t *testing.T, method, path string, data []byte, token string) *httptest.ResponseRecorder {
 	req, err := http.NewRequest(method, path, bytes.NewBuffer(data))
 	if err != nil {
-		t.Fatalf("Invalid request: %s", err)
+		t.Fatalf("%s: invalid request: %s", failPrefix(t, 2), err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	addToken(req, token)
@@ -125,60 +163,60 @@ func doPut(t *testing.T, path string, data []byte, token string) *httptest.Respo
 	return doMethod(t, "PUT", path, data, token)
 }
 
+func doPatch(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
+	return doMethod(t, "PATCH", path, data, token)
+}
+
 func doDelete(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
 	return doMethod(t, "DELETE", path, data, token)
 }
 
-func doRequest(req *http.Request) *httptest.ResponseRecorder {
-	rr := httptest.NewRecorder()
-	app.router.ServeHTTP(rr, req)
-	return rr
-}
-
-func checkResponseCode(t *testing.T, r *httptest.ResponseRecorder, want int, tag string) {
+func checkResponseCode(t *testing.T, r *httptest.ResponseRecorder, want int) {
 	got := r.Code
 	if got != want {
-		t.Fatalf("Check response code (%s). Got %d. Want %d. \n", tag, got, want)
+		t.Fatalf("%s: check response code. Got %d. Want %d.", failPrefix(t, 1), got, want)
 	}
 }
 
-func checkResponseBody(t *testing.T, r *httptest.ResponseRecorder, want string, tag string) {
+func checkResponseBody(t *testing.T, r *httptest.ResponseRecorder, want string) {
 	got := r.Body.String()
 	if got != want {
-		t.Fatalf("Check response body (%s). Got %s. Want %s", tag, got, want)
+		t.Fatalf("%s: check response body. Got %s. Want %s", failPrefix(t, 1), got, want)
 	}
 }
 
-func getOnePending(t *testing.T, category string) (id, email string, data map[string]any) {
-	c := context.Background()
-	row := app.pool.QueryRow(c,
-		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s';`, category))
+func getPending(t *testing.T, category string) (id, email string, data map[string]any) {
+	row := app.pool.QueryRow(
+		context.Background(),
+		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s';`, category),
+	)
 	err := row.Scan(&id, &email, &data)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 2), err)
 	}
 	return
 }
 
-func getOnePendingJoin(t *testing.T) (id, name, email, passwordHash string, extra map[string]any) {
-	id, email, data := getOnePending(t, "join")
+func getPendingJoin(t *testing.T) (id, name, email, passwordHash string, extra any) {
+	id, email, data := getPending(t, "join")
 	name = data["name"].(string)
 	passwordHash = data["password_hash"].(string)
-	extra = data["extra"].(map[string]any)
+	extra = data["extra"]
 	return id, name, email, passwordHash, extra
 }
 
-func getOnePendingResetPassword(t *testing.T) (id, email string) {
-	id, email, _ = getOnePending(t, "reset_password")
+func getPendingResetPassword(t *testing.T) (id, email string) {
+	id, email, _ = getPending(t, "reset_password")
 	return id, email
 }
 
-func getPending(t *testing.T, category string) (result []map[string]any) {
-	c := context.Background()
-	rows, err := app.pool.Query(c,
-		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s' ORDER BY created_at ASC;`, category))
+func getAllPending(t *testing.T, category string) (result []map[string]any) {
+	rows, err := app.pool.Query(
+		context.Background(),
+		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s' ORDER BY created_at ASC;`, category),
+	)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 2), err)
 	}
 	defer rows.Close()
 
@@ -187,7 +225,7 @@ func getPending(t *testing.T, category string) (result []map[string]any) {
 		d := map[string]any{}
 		err = rows.Scan(&id, &email, &d)
 		if err != nil {
-			t.Fatalf("Query failed: %s.", err)
+			t.Fatalf("%s: query failed: %s.", failPrefix(t, 2), err)
 		}
 		if d == nil {
 			d = map[string]any{}
@@ -201,233 +239,262 @@ func getPending(t *testing.T, category string) (result []map[string]any) {
 }
 
 func getPendingJoins(t *testing.T) (result []map[string]any) {
-	return getPending(t, "join")
+	return getAllPending(t, "join")
 }
 
 func getPendingPasswordResets(t *testing.T) (result []map[string]any) {
-	return getPending(t, "reset_password")
+	return getAllPending(t, "reset_password")
 }
 
-func assertPendingCount(t *testing.T, want int) {
-	c := context.Background()
+func assertPendingCount(t *testing.T, category string, want int) {
 	var count int
-	err := app.pool.QueryRow(c,
-		fmt.Sprintf(`SELECT COUNT(id) FROM pending;`)).Scan(&count)
-	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
-	}
-	if count != want {
-		t.Fatalf("Counting pending. Got %d. Want %d", count, want)
-	}
-}
 
-func assertPendingCategoryCount(t *testing.T, category string, want int) {
-	c := context.Background()
-	var count int
-	err := app.pool.QueryRow(c,
-		fmt.Sprintf(`SELECT COUNT(id) FROM pending WHERE category = '%s';`, category)).Scan(&count)
-	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
-	}
-	if count != want {
-		t.Fatalf("Counting pending with category '%s'. Got %d. Want %d", category, count, want)
+	var err error
+	if category == "*" {
+		err = app.pool.QueryRow(
+			context.Background(),
+			fmt.Sprintf(`SELECT COUNT(id) FROM pending;`)).Scan(&count)
+		if err != nil {
+			// assume direct call
+			t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+		}
+		if count != want {
+			t.Fatalf("%s: counting all pending. Got %d. Want %d", failPrefix(t, 1), count, want)
+		}
+	} else {
+		err = app.pool.QueryRow(
+			context.Background(),
+			fmt.Sprintf(`SELECT COUNT(id) FROM pending WHERE category = '%s';`, category)).Scan(&count)
+		if err != nil {
+			// assume called through utility functions
+			t.Fatalf("%s: query failed: %s", failPrefix(t, 2), err)
+		}
+		if count != want {
+			t.Fatalf("%s: counting pending with category '%s'. Got %d. Want %d", failPrefix(t, 2), category, count, want)
+		}
 	}
 }
 
 func assertPendingJoinCount(t *testing.T, want int) {
-	assertPendingCategoryCount(t, "join", want)
+	assertPendingCount(t, "join", want)
 }
 func assertPendingResetPasswordCount(t *testing.T, want int) {
-	assertPendingCategoryCount(t, "reset_password", want)
+	assertPendingCount(t, "reset_password", want)
 }
 
-func addUser(t *testing.T, name, email, password string) int {
+func addUser(t *testing.T, name, email, password string) (user int) {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
-		t.Fatalf("Password hash failed: %s.", err)
+		t.Fatalf("%s: password hash failed: %s", failPrefix(t, 1), err)
 	}
-	c := context.Background()
-	var id int
-	err = app.pool.QueryRow(c,
+	err = app.pool.QueryRow(context.Background(),
 		`INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id;`,
-		name, email, passwordHash).Scan(&id)
+		name, email, passwordHash).Scan(&user)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
-	setProfile(t, id, defaultProfile())
 
-	return id
+	return user
+}
+
+func getUser(t *testing.T, email string) (id int, name, passwordHash string) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT id, name, password_hash FROM users WHERE email = $1;`, email).Scan(&id, &name, &passwordHash)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return id, name, passwordHash
+}
+
+func getUserByID(t *testing.T, user int) (name, email, passwordHash string) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT name, email, password_hash FROM users WHERE id = $1;`, user).Scan(&name, &email, &passwordHash)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return name, email, passwordHash
 }
 
 func assertUserCount(t *testing.T, want int) {
-	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(
-		c,
+		context.Background(),
 		`SELECT COUNT(id) FROM users;`).Scan(&count)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 	if count != want {
-		t.Fatalf("Counting users. Got %d. Want %d", count, want)
+		t.Fatalf("%s: counting users. Got %d. Want %d", failPrefix(t, 1), count, want)
 	}
 }
 
 func addSession(t *testing.T, user int) string {
-	c := context.Background()
 	var id string
-	err := app.pool.QueryRow(c,
+	err := app.pool.QueryRow(
+		context.Background(),
 		`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user).Scan(&id)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 	return id
 }
 
-func addUserWithSession(t *testing.T, name, email, password string) (user int, session string) {
-	user = addUser(t, name, email, password)
-	session = addSession(t, user)
-	return
+func getSession(t *testing.T, user int) (session string) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT id FROM sessions WHERE user_id = $1;`, user).Scan(&session)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return session
 }
 
-func setProfile(t *testing.T, user int, data map[string]any) {
-	c := context.Background()
-	_, err := app.pool.Exec(c,
-		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
+func assertSessionCount(t *testing.T, want int) {
+	var count int
+	err := app.pool.QueryRow(context.Background(),
+		`SELECT COUNT(id) FROM sessions;`).Scan(&count)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: count sessions. Got %d. Want %d", failPrefix(t, 1), count, want)
 	}
 }
 
-func updateProfile(t *testing.T, user int, data map[string]any) {
-	c := context.Background()
-	_, err := app.pool.Exec(c,
+func setProfile(t *testing.T, user int, data map[string]any) {
+	_, err := app.pool.Exec(
+		context.Background(),
+		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+}
+
+func updateProfile(t *testing.T, user int, data profileData) {
+	_, err := app.pool.Exec(
+		context.Background(),
 		`UPDATE profiles SET data = $1 WHERE id = $2;`, data, user)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 }
 
 func assertProfileCount(t *testing.T, want int) {
-	c := context.Background()
 	var count int
 	err := app.pool.QueryRow(
-		c,
+		context.Background(),
 		`SELECT COUNT(id) FROM profiles;`).Scan(&count)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 	if count != want {
-		t.Fatalf("Counting Profiles. Got %d. Want %d", count, want)
+		t.Fatalf("%s: counting profiles. Got %d. Want %d", failPrefix(t, 1), count, want)
 	}
 }
 
 func addPendingJoin(t *testing.T, name, email, password string) string {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
-		t.Fatalf("Password hash failed: %s.", err)
+		t.Fatalf("%s: password hash failed: %s", failPrefix(t, 1), err)
 	}
 	data := map[string]string{
 		"name":          name,
 		"password_hash": string(passwordHash),
 	}
-
 	var id string
-	c := context.Background()
-	err = app.pool.QueryRow(c,
+	err = app.pool.QueryRow(
+		context.Background(),
 		`INSERT INTO pending (email, category, data) VALUES ($1, 'join', $2) RETURNING id;`,
 		email, data).Scan(&id)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 	return id
 }
 
 func addPendingResetPassword(t *testing.T, email string) string {
 	var id string
-	c := context.Background()
-	err := app.pool.QueryRow(c,
+	err := app.pool.QueryRow(
+		context.Background(),
 		`INSERT INTO pending (email, category) VALUES ($1, 'reset_password') RETURNING id;`,
 		email).Scan(&id)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 	return id
 }
 
-func assertSessionCount(t *testing.T, want int) {
-	c := context.Background()
-	var count int
-	err := app.pool.QueryRow(
-		c,
-		`SELECT COUNT(id) FROM sessions;`).Scan(&count)
-	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
-	}
-	if count != want {
-		t.Fatalf("Count sessions. Got %d. Want %d", count, want)
-	}
-}
-
-func getUser(t *testing.T, email string) (id int, name, passwordHash string) {
-	c := context.Background()
-	err := app.pool.QueryRow(c,
-		`SELECT id, name, password_hash FROM users WHERE email = $1;`, email).Scan(&id, &name, &passwordHash)
-	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
-	}
-	return id, name, passwordHash
-}
-
-func compareProfiles(t *testing.T, got, want map[string]any) {
+func assertUserData(t *testing.T, got userData, want userData) {
 	gots := fmt.Sprintf("%v", got)
 	wants := fmt.Sprintf("%v", want)
 	if gots != wants {
-		t.Fatalf("Profiles do not match: Got %s. Want %s", gots, wants)
+		t.Fatalf("%s: data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+	}
+}
+
+func assertProfileInData(t *testing.T, got userData, want profileData) {
+	gots := fmt.Sprintf("%v", got.Profile)
+	wants := fmt.Sprintf("%v", want)
+	if gots != wants {
+		t.Fatalf("%s: profile data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+	}
+}
+
+func assertEmail(t *testing.T, items []queueItem, id, email, lang string) {
+	if len(items) != 1 {
+		t.Fatalf("too many items. Got %d. Want 1", len(items))
+
+	}
+	i := items[0]
+	if i.email != email || !strings.Contains(i.url, id) || i.lang != lang {
+		t.Fatalf("unexpected mailer data. Got %s, %s, %s. Want %s, %s, %s",
+			i.url, i.email, i.lang, id, email, lang)
 	}
 }
 
 func setLimits(t *testing.T, pending, sessions int) {
-	c := context.Background()
-	_, err := app.pool.Exec(c,
+	_, err := app.pool.Exec(
+		context.Background(),
 		`UPDATE limits SET pending = $1, sessions = $2 WHERE id=1;`, pending, sessions)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 }
 
 func resetLimits(t *testing.T) {
-	c := context.Background()
-	_, err := app.pool.Exec(c,
+	_, err := app.pool.Exec(
+		context.Background(),
 		`UPDATE limits SET pending = max_pending, sessions = max_sessions WHERE id=1;`)
 	if err != nil {
-		t.Fatalf("Query failed: %s.", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 }
 
-func modifySession(t *testing.T, session string, modifiedAt time.Time) {
+func renewSession(t *testing.T, session string, modifiedAt time.Time) {
 	_, err := app.pool.Exec(
 		context.Background(),
 		`UPDATE sessions SET modified_at = $1 WHERE id = $2;`, modifiedAt, session)
 	if err != nil {
-		t.Fatalf("Query failed: %s", err)
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
 }
 
-func getTTLs(t *testing.T) (pending, sessions time.Time) {
+func fromTTLs(t *testing.T, addDays int) (pending, sessions time.Time) {
 	var p, s int
 	var unit string
 	fmt.Sscanf(pendingTTL, "%d %s", &p, &unit)
 
 	if unit != "days" {
-		t.Fatalf("Unexpected unit for pendingTTL. Got %s. Want days", unit)
+		t.Fatalf("%s: inexpected unit for pendingTTL. Got %s. Want days", failPrefix(t, 1), unit)
 	}
 	fmt.Sscanf(sessionTTL, "%d %s", &s, &unit)
 	if unit != "days" {
-		t.Fatalf("Unexpected unit for sessionTTL. Got %s. Want days", unit)
+		t.Fatalf("%s: unexpected unit for sessionTTL. Got %s. Want days", failPrefix(t, 1), unit)
 	}
 
-	pending = time.Now().AddDate(0, 0, -p)
-	sessions = time.Now().AddDate(0, 0, -s)
+	pending = time.Now().AddDate(0, 0, -p+addDays)
+	sessions = time.Now().AddDate(0, 0, -s+addDays)
 	return
 }

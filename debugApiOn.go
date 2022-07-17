@@ -18,28 +18,38 @@ import (
 	go build --tags=gotags_debug_api
 */
 
-func (a *GoTags) initializeExtra(router *gin.Engine) {
-	log.Println("WARNING: GOTAGS DEBUG API ENABLED.")
-	router.POST(paths["debug+reset"], a.debugReset)
-	router.GET(paths["debug+pending"], a.debugGetPending)
+func init() {
+	addExtraInitialization(debugAPIExtra)
 }
 
-func (a *GoTags) debugReset(c *gin.Context) {
+func debugAPIExtra(a *GoTags) {
+	router := a.router
+	log.Println("WARNING: GOTAGS DEBUG API ENABLED.")
+	router.POST(paths["debug_reset"], a.debugAPIReset)
+	router.GET(paths["debug_pending"], a.debugAPIGetPending)
+}
+
+func (a *GoTags) debugAPIReset(c *gin.Context) {
 	tx, err := a.pool.Begin(context.Background())
 	defer tx.Rollback(context.Background())
 
 	b := &pgx.Batch{}
 	b.Queue("DELETE FROM pending;")
+	b.Queue("DELETE FROM limiter;")
+	b.Queue("ALTER SEQUENCE limiter_id_seq RESTART;")
 	b.Queue("DELETE FROM users;")
 	b.Queue("ALTER SEQUENCE users_id_seq RESTART;")
+	// TODO: tags
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
 	_, err1 := r.Exec()
 	_, err2 := r.Exec()
 	_, err3 := r.Exec()
+	_, err4 := r.Exec()
+	_, err5 := r.Exec()
 
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -54,7 +64,7 @@ func (a *GoTags) debugReset(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-func (a *GoTags) debugGetPending(c *gin.Context) {
+func (a *GoTags) debugAPIGetPending(c *gin.Context) {
 	category := c.Query("category")
 
 	type outItem struct {
@@ -64,7 +74,8 @@ func (a *GoTags) debugGetPending(c *gin.Context) {
 	}
 	output := []outItem{}
 
-	rows, err := a.pool.Query(context.Background(),
+	rows, err := a.pool.Query(
+		context.Background(),
 		`SELECT id, email, data FROM pending
 		 WHERE category = $1
 		 ORDER BY created_at ASC;`, category)

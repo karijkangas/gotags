@@ -2,11 +2,11 @@ swagger: "2.0"
 info:
   contact:
     name: Kari Kangas (karijkangas@gmail.com)
-  description: ""
+  description: "Data consists of 3 parts: (name, email) account data, user data, and token. With extra, join may carry the original link over email."
   license:
     name: MIT
   title: Gotagsavaruus REST API
-  version: 0.0.1
+  version: 0.0.2
 host: 127.0.0.1:8000
 servers:
   - url: http://127.0.0.1:8000
@@ -33,9 +33,11 @@ paths:
   /join/check:
     post:
       description: |
-        Check account availability. An account is available if the email is not used by an existing user.
+        Check account availability. 
+
+        An account is available if email is not used by an existing user.
       parameters:
-        - description: Join check input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -54,13 +56,20 @@ paths:
           description: Account not available
       tags:
         - public
-  /join/:
+  /join:
     post:
       description: |
-        Create a join request. Sends an email with a link to verify account. Join requests are
-        purged from the database after some time (1 day).
+        Create a join request.
+
+        Sends an email with a link and instructions how to verify and activate account.
+
+        Ignored requests are purged from the database after a time-to-live (TTL) period.
+
+        The number of pending requests is limited per email address.
+
+        The number of requests in total within a time period is limited per email address.
       parameters:
-        - description: Join input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -82,12 +91,17 @@ paths:
   /join/activate:
     post:
       description: |
-        Activate pending join request. Creates a user account matching the pending join request
-        data and removes the pending join request from the database. Given email and password
-        must match the email and password in the pending join request data. Returns a session
-        token.
+        Activate a pending join request.
+
+        Creates a membership matching the request data.
+
+        Email and password must match the email and password in the request.
+
+        If success, removes the request from the database.
+
+        Starts a session and returns a token, see /signin.
       parameters:
-        - description: Join activate input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -97,7 +111,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Join activate output data
+          description: Membership activated. Extra, if present, carries data from join
           schema:
             $ref: "#/definitions/OUTJoinActivate"
         "400":
@@ -106,14 +120,20 @@ paths:
           description: Invalid email/password
         "404":
           description: Join request not found
+        "429":
+          description: Too many sessions
       tags:
         - public
-  /signin/:
+  /signin:
     post:
       description: |
         Signin with email and password.
+
+        The number of active sessions per email address is limited.
+
+        Session has a time-to-live. A session can be renewed, reseting its TTL counter.
       parameters:
-        - description: Signin input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -123,7 +143,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Signin output data
+          description: Signed in
           schema:
             $ref: "#/definitions/OUTSignin"
         "400":
@@ -134,13 +154,18 @@ paths:
           description: Too many sessions
       tags:
         - public
-  /reset-password/:
+  /reset-password:
     post:
       description: |
-        Create a reset password request. Sends an email with a link to reset password. Reset
-        password requests are purged from the database after some time (1 day).
+        Create a reset password request.
+
+        Sends an email with a link and instructions how to reset password.
+
+        Ignored requests are purged from the database after a time-to-live period.
+
+        The number of requests in total within a time period is limited per email address.
       parameters:
-        - description: Reset password input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -162,11 +187,15 @@ paths:
   /reset-password/new:
     post:
       description: |
-        Sets new password and removes the reset password request from the database. Given email
-        must match the email in the pending reset password request data. Returns a session
-        token.
+        Set new password.
+
+        Removes the reset password request from the database.
+
+        Email must match the email in the request.
+
+        Starts a session and returns a token, see /signin.
       parameters:
-        - description: New password input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -176,15 +205,15 @@ paths:
         - application/json
       responses:
         "200":
-          description: New password output data
+          description: New password set, here is your data
           schema:
             $ref: "#/definitions/OUTNewPassword"
         "400":
           description: Invalid data
         "401":
-          description: Email does not match the email in the request
+          description: Emails do not match
         "404":
-          description: Password reset request not found
+          description: Password reset equest not found
         "410":
           description: User with email not found
         "429":
@@ -194,35 +223,37 @@ paths:
   /auth/session:
     patch:
       description: |
-        Renew session, a ping. (nginx rate-limited?)
+        Ping, renew a session.
       security:
         - ApiKeyAuth: []
       produces:
         - application/json
       responses:
-        "204":
+        "200":
           description: Session renewed
         "401":
           description: Invalid token
-        "410":
-          description: Failed, session expired?
+        "404":
+          description: Failed, session expired
       tags:
         - authorized
     delete:
       description: |
-        Delete session, sign- or logout.
+        Delete session: sign out.
+
+        Token goes void, session data removed.
       security:
         - ApiKeyAuth: []
       produces:
         - application/json
       responses:
         "204":
-          description: Session deleted
+          description: Session deleted, token void.
         "401":
           description: Invalid token
       tags:
         - authorized
-  /auth/account/:
+  /auth/account:
     get:
       description: |
         Get account data.
@@ -232,13 +263,13 @@ paths:
         - application/json
       responses:
         "200":
-          description: Account output data
+          description: Account data
           schema:
             $ref: "#/definitions/OUTAccount"
         "401":
           description: Invalid token
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
       tags:
         - authorized
     put:
@@ -247,7 +278,7 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
-        - description: Update account input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -265,16 +296,20 @@ paths:
         "401":
           description: Invalid token
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
       tags:
         - authorized
     delete:
       description: |
         Delete account.
+
+        Beware: removes all data (sessions, account, user data) from the database.
+
+        Devops based on backups.
       security:
         - ApiKeyAuth: []
       parameters:
-        - description: Delete account input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -292,35 +327,69 @@ paths:
         "409":
           description: Incorrect password
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
       tags:
         - authorized
-  /auth/profile/:
+  /auth/your-data:
     get:
       description: |
-        Get profile data.
+        Get user data.
       security:
         - ApiKeyAuth: []
       produces:
         - application/json
       responses:
         "200":
-          description: Profile output data
+          description: Your data
           schema:
-            $ref: "#/definitions/OUTProfile"
+            $ref: "#/definitions/OUTUserData"
         "401":
           description: Invalid token
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
       tags:
         - authorized
-    put:
+    # post:
+    #   description: |
+    #     EXPERIMENTAL: Update profile data.
+
+    #     Proper key updates valid profile data and returns 200 OK.
+
+    #     //go:build gotags_profile_keys
+    #   security:
+    #     - ApiKeyAuth: []
+    #   parameters:
+    #     - description: Input data
+    #       in: body
+    #       name: data
+    #       required: true
+    #       schema:
+    #         $ref: "#/definitions/INProfile"
+    #   produces:
+    #     - application/json
+    #   responses:
+    #     "200":
+    #       description: Profile data updated
+    #       schema:
+    #         $ref: "#/definitions/OUTProfile"
+    #     "400":
+    #       description: Invalid data
+    #     "401":
+    #       description: Invalid token
+    #     "403":
+    #       description: Incorrect key
+    #     "410":
+    #       description: Failed, user gone?
+    #   tags:
+    #     - authorized
+  /auth/your-data/profile:
+    post:
       description: |
-        Update profile data.
+        Set user profile.
       security:
         - ApiKeyAuth: []
       parameters:
-        - description: Update profile input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -330,15 +399,74 @@ paths:
         - application/json
       responses:
         "200":
-          description: Profile data updated
+          description: User data tags updated
           schema:
-            $ref: "#/definitions/OUTProfile"
+            $ref: "#/definitions/OUTUserData"
         "400":
           description: Invalid data
         "401":
           description: Invalid token
+        "404":
+          description: Invalid tag
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
+      tags:
+        - authorized
+  /auth/your-data/tags:
+    post:
+      description: |
+        Add tags to user data.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INUserTags"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: User data tags updated
+          schema:
+            $ref: "#/definitions/OUTUserData"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "404":
+          description: Invalid tag
+        "410":
+          description: Failed, user gone?
+      tags:
+        - authorized
+    delete:
+      description: |
+        Remove tags from your data.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INDeleteUserTag"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: User data tags updated
+          schema:
+            $ref: "#/definitions/OUTUserData"
+        "400":
+          description: Invalid password
+        "401":
+          description: Invalid token
+        "410":
+          description: Failed, user gone?
       tags:
         - authorized
   /auth/password:
@@ -348,7 +476,7 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
-        - description: Update password input data
+        - description: Input data
           in: body
           name: data
           required: true
@@ -357,7 +485,7 @@ paths:
       produces:
         - application/json
       responses:
-        "204":
+        "200":
           description: Password changed
         "400":
           description: Invalid data
@@ -366,13 +494,68 @@ paths:
         "409":
           description: Incorrect password
         "410":
-          description: Failed, use gone?
+          description: Failed, user gone?
+      tags:
+        - authorized
+  /auth/tags/{id}:
+    get:
+      description: |
+        Get tag data.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Tag ID
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Tag data
+          schema:
+            $ref: "#/definitions/OUTTag"
+        "401":
+          description: Invalid token
+        "404":
+          description: Tag not found
+      tags:
+        - authorized
+    put:
+      description: |
+        Update tag data.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INTagData"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Tag data updated
+          schema:
+            $ref: "#/definitions/OUTTagData"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "404":
+          description: Tag not found
       tags:
         - authorized
   /debug/reset:
     post:
       description: |
-        DEBUG API: reset database
+        DEBUG API: reset database.
+
+        //go:build gotags_debug_api
       produces:
         - application/json
       responses:
@@ -383,7 +566,9 @@ paths:
   /debug/pending:
     get:
       description: |
-        DEBUG API: get pending
+        DEBUG API: get pending.
+
+        //go:build gotags_debug_api
       produces:
         - application/json
       parameters:
@@ -394,7 +579,7 @@ paths:
           description: Category
       responses:
         "200":
-          description: Get pending output data
+          description: Pending items
           schema:
             $ref: "#/definitions/OUTDebugGetPending"
       tags:
@@ -426,7 +611,9 @@ definitions:
       lang:
         type: string
       extra:
-        type: object
+        oneOf:
+          - type: string
+          - type: object
     required:
       - name
       - email
@@ -451,12 +638,17 @@ definitions:
         type: string
       email:
         type: string
-      profile:
+      data:
         type: object
       token:
         type: string
       extra:
         type: object
+    required:
+      - name
+      - email
+      - data
+      - token
   INSignin:
     type: object
     properties:
@@ -474,7 +666,7 @@ definitions:
         type: string
       email:
         type: string
-      profile:
+      data:
         type: object
       token:
         type: string
@@ -507,7 +699,7 @@ definitions:
         type: string
       email:
         type: string
-      profile:
+      data:
         type: object
       token:
         type: string
@@ -534,17 +726,47 @@ definitions:
   INProfile:
     type: object
     properties:
-      data:
+      profile:
         type: object
+      modified:
+        type: string
     required:
-      - data
-  OUTProfile:
+      - profile
+      - modified
+  INProfileTag:
     type: object
     properties:
-      data:
-        type: object
+      tag:
+        type: array
+        items:
+          type: string
     required:
-      - data
+      - tag
+  OUTUserData:
+    type: object
+    properties:
+      profile:
+        type: object
+      tags:
+        type: array
+        items:
+          type: array
+          items:
+            type: string
+          minItems: 4
+          maxItems: 4
+    required:
+      - profile
+      - tags
+  INDeleteProfileTag:
+    type: object
+    properties:
+      tags:
+        type: array
+        items:
+          type: string
+    required:
+      - tag
   INPassword:
     type: object
     properties:
@@ -555,6 +777,23 @@ definitions:
     required:
       - password
       - newPassword
+  OUTTag:
+    type: object
+    properties:
+      name:
+        type: string
+      category:
+        type: string
+      data:
+        type: object
+    required:
+      - name
+      - category
+      - data
+  INTagData:
+    type: object
+  OUTTagData:
+    type: object
   OUTDebugGetPending:
     type: object
     properties:
