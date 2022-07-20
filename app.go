@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -44,7 +45,7 @@ var paths = map[string]string{
 	"debug_pending": "/debug/pending",
 }
 
-// GoTags holds all
+// GoTags holds parts together
 type GoTags struct {
 	pool       *pgxpool.Pool
 	router     *gin.Engine
@@ -54,16 +55,9 @@ type GoTags struct {
 
 // Session is set to gin context once Token validates
 type Session struct {
-	User int
-	// Name  string
-	// Email string
+	User  int
 	Token string
 }
-
-// // default profile
-// func defaultProfile() map[string]any {
-// 	return map[string]any{}
-// }
 
 // auth middleware. Token is http header variable with format "Token": "uuid-v4".
 // Sessions are stored in database.
@@ -71,23 +65,23 @@ func (a *GoTags) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokens, ok := c.Request.Header["Token"]
 		if !ok {
-			fmt.Println("STEP 1")
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		// always just the first value
+		// use the first value
 		token := tokens[0]
+
 		var user int
 		// var name, email string // excluding password_hash.
 		err := a.pool.QueryRow(
 			context.Background(),
 			`SELECT (user_id) FROM sessions WHERE id = $1;`,
 			token).Scan(&user)
-
 		if err != nil {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+
 		c.Set("user", user)
 		c.Set("session", Session{user, token})
 		c.Next()
@@ -98,7 +92,7 @@ func (a *GoTags) auth() gin.HandlerFunc {
 func currentSession(c *gin.Context) Session {
 	s, ok := c.Get("session")
 	if !ok {
-		panic("no session")
+		log.Fatalln("currentSession: no session")
 	}
 	return s.(Session)
 }
@@ -162,17 +156,25 @@ func (a *GoTags) initialize(databaseURL string) {
 
 // cleanup runs database cleanup
 func (a *GoTags) cleanupDB() {
-	log.Printf("Running database cleanup")
+	log.Println("Running database cleanup")
 
 	b := &pgx.Batch{}
 	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%s';`, pendingTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%s';`, sessionTTL))
-	// TODO: cleanup limiter
-	r := a.pool.SendBatch(context.Background(), b)
 
-	r.Exec()
-	r.Exec()
-	r.Close()
+	// TODO: cleanup limiter
+
+	r := a.pool.SendBatch(context.Background(), b)
+	defer r.Close()
+
+	_, err := r.Exec()
+	if err != nil {
+		log.Println("Error in database cleanup:", err)
+	}
+	_, err = r.Exec()
+	if err != nil {
+		log.Println("Error in database cleanup:", err)
+	}
 }
 
 // called from main, runs the server in a loop.
@@ -181,47 +183,45 @@ func (a *GoTags) run(server string) {
 }
 
 // ******************************************************************
-func (a *GoTags) queryEmailExists(email string) (bool, error) {
+func queryEmailExists(pool *pgxpool.Pool, email string) (bool, error) {
 	var exists bool
-	row := a.pool.QueryRow(
+	row := pool.QueryRow(
 		context.Background(),
 		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1);`,
 		email)
 	err := row.Scan(&exists)
-
 	return exists, err
 }
 
-func (a *GoTags) queryProfileData(user int) (data map[string]any, err error) {
-	row := a.pool.QueryRow(
+func queryEmailExistsTx(tx pgx.Tx, email string) (bool, error) {
+	var exists bool
+	row := tx.QueryRow(
 		context.Background(),
-		`SELECT data FROM profiles WHERE id = $1;`,
-		user)
-	err = row.Scan(&data)
-	return data, err
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1);`,
+		email)
+	err := row.Scan(&exists)
+	return exists, err
 }
 
-//
-// func (a *GoTags) queryData(user int) map[string]any {
-// 	var data map[string]any
-// 	row, err := a.pool.Query(
-// 		context.Background(),
-// 		`SELECT (name, email) FROM users WHERE id = $1;`,
-// 		// `SELECT data FROM profiles WHERE id = $1;`,
-// 		user)
-// 	err = row.Scan(&data)
-// 	if err != nil {
-// 		return nil
-// 	}
-// 	return data
-// }
+func queryProfileDataTx(tx pgx.Tx, user int) (data map[string]any, modifiedAt time.Time, err error) {
+	row := tx.QueryRow(
+		context.Background(),
+		`SELECT data, modified_at FROM profiles WHERE id = $1;`,
+		user)
+	err = row.Scan(&data, &modifiedAt)
+	return data, modifiedAt, err
+}
 
-//
-func (a *GoTags) queryUserData(user int) (map[string]any, error) {
-	profileData, err := a.queryProfileData(user)
+func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
+	// get cached data from db/redis?
+
+	profileData, m, err := queryProfileDataTx(tx, user)
 	return map[string]any{
-		"profile": profileData,
-		"tags":    [][4]string{},
+		"profile": map[string]any{
+			"data":        profileData,
+			"modified_at": m,
+		},
+		"tags": [][4]string{},
 	}, err
 	// var tags []string
 	// userTags, err := tx.Query(
@@ -260,16 +260,17 @@ func (a *GoTags) joinCheck(c *gin.Context) {
 	}
 	email := d.Email
 
-	// ensure email is not in use
-	exists, err := a.queryEmailExists(email)
-	if err != nil {
+	// check if email is in use
+	exists, err := queryEmailExists(a.pool, email)
+	switch {
+	case err != nil:
 		c.Status(http.StatusInternalServerError)
 		return
-	}
-	if exists {
+	case exists:
 		c.Status(http.StatusConflict)
 		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{"email": email})
 }
 
@@ -278,7 +279,7 @@ func (a *GoTags) join(c *gin.Context) {
 	var d struct {
 		Name     string `json:"name" binding:"required,min=1"`
 		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=3"`
+		Password string `json:"password" binding:"required,min=1"`
 		Lang     string `json:"lang"`
 		Extra    any    `json:"extra"`
 	}
@@ -292,13 +293,21 @@ func (a *GoTags) join(c *gin.Context) {
 	extra := d.Extra
 	lang := d.Lang
 
-	// ensure email not in use
-	exists, err := a.queryEmailExists(email)
+	// begin transaction
+	tx, err := a.pool.Begin(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	if exists {
+	defer tx.Rollback(context.Background())
+
+	// check if email in use
+	exists, err := queryEmailExistsTx(tx, email)
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case exists:
 		c.Status(http.StatusConflict)
 		return
 	}
@@ -306,7 +315,7 @@ func (a *GoTags) join(c *gin.Context) {
 	// calculate hash from incoming password
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
-		c.Status(http.StatusBadRequest)
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 	data := map[string]any{
@@ -315,16 +324,8 @@ func (a *GoTags) join(c *gin.Context) {
 		"extra":         extra,
 	}
 
-	// beging transaction
-	tx, err := a.pool.Begin(context.Background())
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback(context.Background())
-
 	// add email to limiter
-	_, err = tx.Exec(
+	t, err := tx.Exec(
 		context.Background(),
 		`INSERT INTO limiter (email, counter)
 		 SELECT $1, counter_nr
@@ -335,7 +336,11 @@ func (a *GoTags) join(c *gin.Context) {
 	   		ORDER  BY 1
 	   		LIMIT  1
 	   	 ) sub;`, email)
-	if err != nil {
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
 		c.Status(http.StatusTooManyRequests)
 		return
 	}
@@ -348,17 +353,23 @@ func (a *GoTags) join(c *gin.Context) {
 			RETURNING id;`,
 		email, data)
 	err = row.Scan(&uuid)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusTooManyRequests)
 		return
-	}
-	err = tx.Commit(context.Background())
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
+	case err != nil:
+		switch e := err.(type) {
+		case *pgconn.PgError:
+			if e.Code == "P0001" && e.Message == "pending: no capacity" {
+				c.Status(http.StatusTooManyRequests)
+				return
+			}
+		default:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
 	}
 
-	// create join activate url
 	req, err := http.NewRequest("GET", paths["joinActivate"], nil)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
@@ -376,13 +387,20 @@ func (a *GoTags) join(c *gin.Context) {
 		return
 	}
 
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
 	c.Status(http.StatusCreated)
 }
 
 //
 func (a *GoTags) joinActivate(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,min=1"`
+		ID       string `json:"id" binding:"required,uuid"`
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=1"`
 	}
@@ -393,13 +411,13 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	id := d.ID
 	password := d.Password
 
-	// start transaction
+	// begin transaction
 	tx, err := a.pool.Begin(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	defer tx.Rollback(context.Background()) // safe to call after commit
+	defer tx.Rollback(context.Background())
 
 	// delete matching pending join, get email and data
 	var email string
@@ -409,8 +427,12 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 		`DELETE FROM pending WHERE id = $1 AND category = 'join' RETURNING email, data;`,
 		id)
 	err = row.Scan(&email, &data)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
@@ -435,64 +457,64 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 			RETURNING id;`,
 		name, email, passwordHash)
 	err = row.Scan(&user)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
+		// should not happen
+		c.Status(http.StatusInternalServerError)
+		return
+	case err != nil:
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	// comment out as long as defaultProfile is empty JSON object, a database default
-	// profile := defaultProfile()
-	// var newProfile map[string]any
-
 	var token string
-	err2 := tx.QueryRow(
+	row = tx.QueryRow(
 		context.Background(),
-		`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user).Scan(&token)
-	if err2 != nil {
+		`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
+	err = row.Scan(&token)
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusTooManyRequests)
 		return
+	case err != nil:
+		switch e := err.(type) {
+		case *pgconn.PgError:
+			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+				c.Status(http.StatusTooManyRequests)
+				return
+			}
+		default:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
 	}
 
-	// // insert session and profile
-	// // var token string
-	// b := &pgx.Batch{}
-	// b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
-	// // b.Queue(`WITH ins AS(
-	// // 			INSERT INTO profiles (id, data)
-	// // 		   	VALUES ($1, $2)
-	// // 			ON CONFLICT(id) DO UPDATE
-	// // 			SET data = EXCLUDED.data
-	// // 			RETURNING data
-	// // 		)
-	// // 		SELECT * FROM ins
-	// // 		UNION
-	// // 			SELECT data FROM profiles WHERE id=$1;`, user, profile)
-	// b.Queue(`SELECT data FROM profiles WHERE id=$1;`, user)
-	// r := tx.SendBatch(context.Background(), b)
-	// defer r.Close()
-	// err2 := r.QueryRow().Scan(&token) // insert session
-	// // err3 := r.QueryRow().Scan(&newProfile) // insert profile
-
-	// if err2 != nil {
+	// switch {
+	// case err == pgx.ErrNoRows:
 	// 	c.Status(http.StatusTooManyRequests)
 	// 	return
-	// }
-
-	// if err3 != nil {
+	// case err != nil:
 	// 	c.Status(http.StatusInternalServerError)
 	// 	return
 	// }
-	// r.Close()
 
+	userData, err := a.queryUserDataTx(tx, user)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// commit transaction
 	err = tx.Commit(context.Background())
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	userData, err := a.queryUserData(user)
-
-	// c.JSON(http.StatusOK, gin.H{"name": name, "email": email, "": newProfile, "token": token, "extra": extra})
 	c.JSON(http.StatusOK, gin.H{
 		"name":  name,
 		"email": email,
@@ -515,43 +537,93 @@ func (a *GoTags) signin(c *gin.Context) {
 	email := d.Email
 	password := d.Password
 
+	// begin transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
 	// get use data and profile
 	var user int
 	var data map[string]any
 	var name, passwordHash string
-	row := a.pool.QueryRow(
+	row := tx.QueryRow(
 		context.Background(),
-		`WITH xuser AS (
+		`WITH xu AS (
 			SELECT id, name, password_hash FROM users WHERE email = $1
 		 )
-		 SELECT u.id, name, password_hash, data FROM profiles AS p JOIN xuser AS u ON p.id = u.id;`,
+		 SELECT u.id, name, password_hash, data FROM profiles AS p JOIN xu AS u ON p.id = u.id;`,
 		email)
-	err1 := row.Scan(&user, &name, &passwordHash, &data)
+	err = row.Scan(&user, &name, &passwordHash, &data)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusUnauthorized)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
 
 	// validate password
-	err2 := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
-
-	// missing user or invalid email
-	if err1 != nil || err2 != nil {
+	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
+	if err != nil {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
 
 	// create a session
 	var token string
-	row = a.pool.QueryRow(
+	row = tx.QueryRow(
 		context.Background(),
 		`INSERT INTO sessions (user_id)
 			VALUES ($1)
 			RETURNING id;`,
 		user)
-	err := row.Scan(&token)
-	if err != nil {
+	err = row.Scan(&token)
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusTooManyRequests)
+		return
+	case err != nil:
+		switch e := err.(type) {
+		case *pgconn.PgError:
+			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+				c.Status(http.StatusTooManyRequests)
+				return
+			}
+		default:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// switch {
+	// case err == pgx.ErrNoRows:
+	// 	c.Status(http.StatusTooManyRequests)
+	// 	return
+	// case err != nil:
+	// 	c.Status(http.StatusInternalServerError)
+	// 	return
+	// }
+
+	userData, err := a.queryUserDataTx(tx, user)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	userData, err := a.queryUserData(user)
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"name":  name,
@@ -574,18 +646,6 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	email := d.Email
 	lang := d.Lang
 
-	// get user with matching email
-	var user int
-	row := a.pool.QueryRow(
-		context.Background(),
-		`SELECT id FROM users WHERE email = $1;`,
-		email)
-	err := row.Scan(&user)
-	if err != nil {
-		c.Status(http.StatusNotFound)
-		return
-	}
-
 	// beging transaction
 	tx, err := a.pool.Begin(context.Background())
 	if err != nil {
@@ -594,8 +654,24 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	}
 	defer tx.Rollback(context.Background())
 
+	// get user with matching email
+	var user int
+	row := tx.QueryRow(
+		context.Background(),
+		`SELECT id FROM users WHERE email = $1;`,
+		email)
+	err = row.Scan(&user)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusNotFound)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
 	// add email to limiter
-	_, err = tx.Exec(
+	t, err := tx.Exec(
 		context.Background(),
 		`INSERT INTO limiter (email, counter)
 		 SELECT $1, counter_nr
@@ -606,7 +682,11 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	   		ORDER  BY 1
 	   		LIMIT  1
 	   	 ) sub;`, email)
-	if err != nil {
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
 		c.Status(http.StatusTooManyRequests)
 		return
 	}
@@ -620,16 +700,30 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 			RETURNING id;`,
 		email)
 	err = row.Scan(&uuid)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusTooManyRequests)
 		return
+	case err != nil:
+		switch e := err.(type) {
+		case *pgconn.PgError:
+			if e.Code == "P0001" && e.Message == "pending: no capacity" {
+				c.Status(http.StatusTooManyRequests)
+				return
+			}
+		default:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
 	}
-
-	err = tx.Commit(context.Background())
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
+	// switch {
+	// case err == pgx.ErrNoRows:
+	// 	c.Status(http.StatusTooManyRequests)
+	// 	return
+	// case err != nil:
+	// 	c.Status(http.StatusInternalServerError)
+	// 	return
+	// }
 
 	// create reset password url
 	req, err := http.NewRequest("GET", paths["resetPasswordVerify"], nil)
@@ -649,13 +743,20 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 		return
 	}
 
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
 	c.Status(http.StatusCreated)
 }
 
 //
 func (a *GoTags) newPassword(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,min=1"`
+		ID       string `json:"id" binding:"required,uuid"`
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=1"`
 	}
@@ -672,7 +773,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	defer tx.Rollback(context.Background()) // safe to call after commit
+	defer tx.Rollback(context.Background())
 
 	// delete matching pending password reset, get email
 	var email string
@@ -681,10 +782,15 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		`DELETE FROM pending WHERE id = $1 AND category = 'reset_password' RETURNING email;`,
 		id)
 	err = row.Scan(&email)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
 		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
 	}
+
 	if email != d.Email {
 		c.Status(http.StatusUnauthorized)
 		return
@@ -700,60 +806,67 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	// update password hash, get user id and name
 	var user int
 	var name string
-	err = tx.QueryRow(
+	row = tx.QueryRow(
 		context.Background(),
 		`UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, name;`,
-		passwordHash, email).Scan(&user, &name)
-
-	if err != nil {
+		passwordHash, email)
+	err = row.Scan(&user, &name)
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
 	// create session token
 	var token string
-	err2 := tx.QueryRow(
+	row = tx.QueryRow(
 		context.Background(),
 		`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`,
-		user).Scan(&token)
-
-	// if err2 != nil {
-	// 	c.Status(http.StatusGone)
-	// 	return
-	// }
-
-	// // creater session and profile
-	// b := &pgx.Batch{}
-	// b.Queue(`INSERT INTO sessions (user_id) VALUES ($1) RETURNING id;`, user)
-	// // b.Queue(`SELECT data FROM profiles WHERE id = $1;`, user)
-	// r := tx.SendBatch(context.Background(), b)
-	// defer r.Close()
-
-	// // var token string
-	// // var profile map[string]any
-
-	// err1 := r.QueryRow().Scan(&token)
-	// // err2 := r.QueryRow().Scan(&profile)
-
-	if err2 != nil {
+		user)
+	err = row.Scan(&token)
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusTooManyRequests)
 		return
+	case err != nil:
+		switch e := err.(type) {
+		case *pgconn.PgError:
+			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+				c.Status(http.StatusTooManyRequests)
+				return
+			}
+		default:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
 	}
-	// if err2 != nil {
-	// 	c.Status(http.StatusGone)
+
+	// switch {
+	// case err == pgx.ErrNoRows:
+	// 	c.Status(http.StatusTooManyRequests)
+	// 	return
+	// case err != nil:
+	// 	c.Status(http.StatusInternalServerError)
 	// 	return
 	// }
-	// r.Close()
 
-	err = tx.Commit(context.Background())
-	if err != nil {
+	userData, err := a.queryUserDataTx(tx, user)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
-	userData, err := a.queryUserData(user)
+	// commit transaction
+	err = tx.Commit(context.Background())
 	if err != nil {
-		c.Status(http.StatusGone)
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
@@ -768,14 +881,19 @@ func (a *GoTags) newPassword(c *gin.Context) {
 func (a *GoTags) renewSession(c *gin.Context) {
 	session := currentSession(c)
 
-	_, err := a.pool.Exec(
+	t, err := a.pool.Exec(
 		context.Background(),
 		`UPDATE sessions SET modified_at = $1 WHERE id = $2;`,
 		time.Now(), session.Token)
-	if err != nil {
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
 		c.Status(http.StatusGone)
 		return
 	}
+
 	c.Status(http.StatusOK)
 }
 
@@ -783,10 +901,18 @@ func (a *GoTags) renewSession(c *gin.Context) {
 func (a *GoTags) deleteSession(c *gin.Context) {
 	session := currentSession(c)
 
-	a.pool.Exec(
+	t, err := a.pool.Exec(
 		context.Background(),
 		`DELETE FROM sessions WHERE id = $1;`,
 		session.Token)
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
+		c.Status(http.StatusGone)
+		return
+	}
 	c.Status(http.StatusNoContent)
 }
 
@@ -800,10 +926,15 @@ func (a *GoTags) getAccount(c *gin.Context) {
 		`SELECT name FROM users WHERE id = $1;`,
 		session.User)
 	err := row.Scan(&name)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusGone)
 		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{"name": name})
 }
 
@@ -820,18 +951,23 @@ func (a *GoTags) updateAccount(c *gin.Context) {
 	}
 	name := d.Name
 
+	var newName string
 	row := a.pool.QueryRow(
 		context.Background(),
 		`UPDATE users SET name = $1
 			WHERE id = $2 
 			RETURNING name;`,
 		name, session.User)
-	var newName string
 	err := row.Scan(&newName)
-	if err != nil {
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusGone)
 		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{"name": newName})
 }
 
@@ -849,13 +985,29 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 	}
 	password := d.Password
 
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
 	var email string
 	var passwordHash string
-	row := a.pool.QueryRow(
+	row := tx.QueryRow(
 		context.Background(),
 		`SELECT email, password_hash FROM users WHERE id = $1;`,
 		session.User)
-	err := row.Scan(&email, &passwordHash)
+	err = row.Scan(&email, &passwordHash)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
 
 	// validate password
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
@@ -864,11 +1016,22 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 		return
 	}
 
-	_, err = a.pool.Exec(
+	t, err := a.pool.Exec(
 		context.Background(),
 		`DELETE FROM users WHERE id = $1;`, session.User)
-	if err != nil {
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
 		c.Status(http.StatusGone)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
@@ -879,52 +1042,111 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 func (a *GoTags) getData(c *gin.Context) {
 	session := currentSession(c)
 
-	data, err := a.queryUserData(session.User)
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
 	if err != nil {
-		c.Status(http.StatusGone)
+		c.Status(http.StatusInternalServerError)
 		return
 	}
-	// c.JSON(http.StatusOK, gin.H{"data": data})
+	defer tx.Rollback(context.Background())
+
+	data, err := a.queryUserDataTx(tx, session.User)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
 	c.JSON(http.StatusOK, data)
 }
 
 //
 func (a *GoTags) updateProfile(c *gin.Context) {
 	session := currentSession(c)
-	// id := c.GetInt("user")
 
-	data, err := a.queryProfileData(session.User)
+	var d struct {
+		Profile    map[string]any `json:"profile" binding:"required"`
+		ModifiedAt string         `json:"modified_at" binding:"required,min=1"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	t, err := tx.Exec(
+		context.Background(),
+		`UPDATE profiles SET data = $1
+			WHERE id = $2 AND modified_at = $3;`,
+		d.Profile, session.User, d.ModifiedAt)
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
+		c.Status(http.StatusConflict)
+		return
+	}
+
+	data, err := a.queryUserDataTx(tx, session.User)
 	if err != nil {
 		c.Status(http.StatusGone)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": data})
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, data)
 }
 
 //
 func (a *GoTags) connectTags(c *gin.Context) {
-	session := currentSession(c)
+	// session := currentSession(c)
 	// id := c.GetInt("user")
 
-	data, err := a.queryProfileData(session.User)
-	if err != nil {
-		c.Status(http.StatusGone)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": data})
+	// data, err := a.queryProfileData(session.User)
+	// if err != nil {
+	// 	c.Status(http.StatusGone)
+	// 	return
+	// }
+	// c.JSON(http.StatusOK, gin.H{"data": data})
+	c.Status(http.StatusOK)
 }
 
 //
 func (a *GoTags) disconnectTags(c *gin.Context) {
-	session := currentSession(c)
-	// id := c.GetInt("user")
+	// session := currentSession(c)
+	// // id := c.GetInt("user")
 
-	data, err := a.queryProfileData(session.User)
-	if err != nil {
-		c.Status(http.StatusGone)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": data})
+	// data, err := a.queryProfileData(session.User)
+	// if err != nil {
+	// 	c.Status(http.StatusGone)
+	// 	return
+	// }
+	// c.JSON(http.StatusOK, gin.H{"data": data})
+	c.Status(http.StatusOK)
 }
 
 //
@@ -941,17 +1163,28 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 	}
 	password := d.Password
 	newPassword := d.NewPassword
-	// user := c.GetInt("user")
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
 
 	// get current password hash
 	var hash string
-	row := a.pool.QueryRow(
+	row := tx.QueryRow(
 		context.Background(),
 		`SELECT password_hash FROM users WHERE id = $1;`,
 		session.User)
-	err := row.Scan(&hash)
-	if err != nil {
+	err = row.Scan(&hash)
+	switch {
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
@@ -970,32 +1203,196 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 	}
 
 	// update password hash
-	_, err = a.pool.Exec(
+	t, err := tx.Exec(
 		context.Background(),
 		`UPDATE users SET password_hash = $1 WHERE id = $2;`, newHash, session.User)
-	if err != nil {
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
 		c.Status(http.StatusGone)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
 		return
 	}
 
 	c.Status(http.StatusOK)
 }
 
+type tagPath struct {
+	ID string `uri:"id" binding:"required,uuid"`
+}
+
 //
 func (a *GoTags) getTag(c *gin.Context) {
-	// session := currentSession(c)
-	id := c.Param("id")
+	session := currentSession(c)
 
-	// TODO: tag data
+	var tp tagPath
+	if err := c.ShouldBindUri(&tp); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	tag := tp.ID
 
-	c.JSON(http.StatusOK, gin.H{"tag": id})
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	var name, category string
+	var data map[string]any
+	b := &pgx.Batch{}
+	b.Queue(`SELECT name,category,data FROM tags WHERE id = $1;`, tag)
+	b.Queue(`INSERT INTO tag_events (user_id,tag_id,category) VALUES ($1,$2,'accessed');`, session.User, tag)
+
+	r := tx.SendBatch(context.Background(), b)
+	defer r.Close()
+
+	row := r.QueryRow()
+	err = row.Scan(&name, &category, &data)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusNotFound)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	t, err := r.Exec()
+	switch {
+	case t.RowsAffected() == 0:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	r.Close()
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"name":     name,
+		"category": category,
+		"data":     data,
+	})
+}
+
+type tagFunc func(currentData, updateData map[string]any) (newData map[string]any)
+
+func nopHandler(currentData, updateData map[string]any) map[string]any {
+	return updateData
+}
+
+var tagHandlers = map[string]tagFunc{
+	"nop": nopHandler,
+	// "counter": nil,
+	// "anti-counter": nil,
 }
 
 func (a *GoTags) updateTag(c *gin.Context) {
-	// session := currentSession(c)
-	id := c.Param("id")
+	session := currentSession(c)
 
-	// TODO: tag data
+	var tp tagPath
+	if err := c.ShouldBindUri(&tp); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	tag := tp.ID
 
-	c.JSON(http.StatusOK, gin.H{"tag": id})
+	var d struct {
+		Data map[string]any `json:"data" binding:"required"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	updateData := d.Data
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	// query tag data
+	var name, category string
+	var currentData map[string]any
+	row := tx.QueryRow(
+		context.Background(),
+		`SELECT name,category,data FROM tags WHERE id = $1;`, tag)
+	err = row.Scan(&name, &category, &currentData)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusNotFound)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// use tag category to call correct tag handler
+	f, ok := tagHandlers[category]
+	if !ok {
+		log.Println("unexpected tag handler category", category)
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	newData := f(currentData, updateData)
+
+	b := &pgx.Batch{}
+	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2;`, newData, tag)
+	b.Queue(`INSERT INTO tag_events (user_id,tag_id,category) VALUES ($1, $2,'accessed');`, session.User, tag)
+
+	r := tx.SendBatch(context.Background(), b)
+	defer r.Close()
+
+	t, err := r.Exec()
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
+		c.Status(http.StatusGone)
+		return
+	}
+
+	t, err = r.Exec()
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	case t.RowsAffected() == 0:
+		c.Status(http.StatusGone)
+		return
+	}
+
+	r.Close()
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": newData,
+	})
 }

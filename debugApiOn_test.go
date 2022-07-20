@@ -30,10 +30,11 @@ type pending struct {
 
 func TestDebugAPIReset(t *testing.T) {
 	clearTables(t)
+	profile := profileData{Data: map[string]any{}}
 
 	addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
 	user := addUser(t, "John Doe", "johndöe@example.com", "password1234")
-	updateProfile(t, user, map[string]any{})
+	updateProfile(t, user, profile)
 	addSession(t, user)
 	addPendingResetPassword(t, "johndöe@example.com")
 
@@ -81,7 +82,7 @@ func TestDebugAPIGetPendingJoin(t *testing.T) {
 	checkResponseBody(t, response, "")
 
 	category := "join"
-	p := paths["debug_pending"] + fmt.Sprintf("?category=%s", category)
+	p := pathWithQueryParam(paths["debug_pending"], "category", category)
 	response = doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 
@@ -99,7 +100,7 @@ func TestDebugAPIGetPendingJoinEmpty(t *testing.T) {
 	clearTables(t)
 
 	category := "join"
-	p := paths["debug_pending"] + fmt.Sprintf("?category=%s", category)
+	p := pathWithQueryParam(paths["debug_pending"], "category", category)
 	response := doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 
@@ -148,7 +149,7 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 	}
 	joins := getPendingJoins(t)
 
-	p := paths["debug_pending"] + "?category=join"
+	p := pathWithQueryParam(paths["debug_pending"], "category", "join")
 	response := doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 

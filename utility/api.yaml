@@ -233,8 +233,8 @@ paths:
           description: Session renewed
         "401":
           description: Invalid token
-        "404":
-          description: Failed, session expired
+        "410":
+          description: Failed, user gone?
       tags:
         - authorized
     delete:
@@ -251,6 +251,8 @@ paths:
           description: Session deleted, token void.
         "401":
           description: Invalid token
+        "410":
+          description: Failed, user gone?
       tags:
         - authorized
   /auth/account:
@@ -349,43 +351,12 @@ paths:
           description: Failed, user gone?
       tags:
         - authorized
-    # post:
-    #   description: |
-    #     EXPERIMENTAL: Update profile data.
-
-    #     Proper key updates valid profile data and returns 200 OK.
-
-    #     //go:build gotags_profile_keys
-    #   security:
-    #     - ApiKeyAuth: []
-    #   parameters:
-    #     - description: Input data
-    #       in: body
-    #       name: data
-    #       required: true
-    #       schema:
-    #         $ref: "#/definitions/INProfile"
-    #   produces:
-    #     - application/json
-    #   responses:
-    #     "200":
-    #       description: Profile data updated
-    #       schema:
-    #         $ref: "#/definitions/OUTProfile"
-    #     "400":
-    #       description: Invalid data
-    #     "401":
-    #       description: Invalid token
-    #     "403":
-    #       description: Incorrect key
-    #     "410":
-    #       description: Failed, user gone?
-    #   tags:
-    #     - authorized
   /auth/your-data/profile:
     post:
       description: |
         Set user profile.
+
+        modified_at enables blocking out-of-sync updates from multiple browser instances.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -399,15 +370,15 @@ paths:
         - application/json
       responses:
         "200":
-          description: User data tags updated
+          description: Profile updated
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
           description: Invalid data
         "401":
           description: Invalid token
-        "404":
-          description: Invalid tag
+        "409":
+          description: modified_at does not match modified_at in database
         "410":
           description: Failed, user gone?
       tags:
@@ -728,11 +699,11 @@ definitions:
     properties:
       profile:
         type: object
-      modified:
+      modified_at:
         type: string
     required:
       - profile
-      - modified
+      - modified_at
   INProfileTag:
     type: object
     properties:
@@ -780,6 +751,8 @@ definitions:
   OUTTag:
     type: object
     properties:
+      id:
+        type: string
       name:
         type: string
       category:
@@ -792,8 +765,18 @@ definitions:
       - data
   INTagData:
     type: object
+    properties:
+      data:
+        type: object
+    required:
+      - data
   OUTTagData:
     type: object
+    properties:
+      data:
+        type: object
+    required:
+      - data
   OUTDebugGetPending:
     type: object
     properties:

@@ -116,6 +116,32 @@ go test --tags=gotags_debug_api
 go build --tags=gotags_debug_api
 ```
 
+# Remote debug using Delve
+
+```shell
+go install github.com/go-delve/delve/cmd/dlv@latest
+dlv --listen=:2345 --headless --api-version=2 --log test -- -test.run ^TestRenewSession$
+```
+
+VSC launch.json
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch remote dlv",
+      "type": "go",
+      "request": "attach",
+      "mode": "remote",
+      "remotePath": "/vm-share/gotags",
+      "port": 8345,
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
+```
+
 # Swagger UI (Apple)
 
 ```shell

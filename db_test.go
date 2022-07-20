@@ -86,6 +86,7 @@ func TestPendingJoinLimit(t *testing.T) {
 	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
+	// extra := "https://gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"
 	extra := map[string]any{"url": "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"}
 	lang := "en"
 

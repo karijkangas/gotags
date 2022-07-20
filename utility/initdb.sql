@@ -83,7 +83,7 @@ CREATE OR REPLACE FUNCTION check_pending_capacity()
 BEGIN
   IF (SELECT count(*) FROM pending as p1 WHERE p1.email = NEW.email) >= get_pending_limit()
   THEN
-    RAISE EXCEPTION 'No more for you';
+    RAISE EXCEPTION 'pending: no capacity';
   END IF;
   RETURN NEW;
 END;
@@ -210,7 +210,7 @@ CREATE OR REPLACE FUNCTION check_sessions_capacity()
 BEGIN
   IF (SELECT count(*) FROM sessions as s1 WHERE s1.user_id = NEW.user_id) >= get_sessions_limit()
   THEN
-    RAISE EXCEPTION 'No more for you';
+    RAISE EXCEPTION 'sessions: no capacity';
   END IF;
   RETURN NEW;
 END;

@@ -32,66 +32,107 @@ func resetMailer() []queueItem {
 }
 
 // data structures for API output
-type joinCheckData struct {
+type joinCheckOut struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
-type joinActivateData struct {
+type joinActivateOut struct {
 	Name  string         `json:"name" binding:"required"`
 	Email string         `json:"email" binding:"required,email"`
-	Data  userData       `json:"data" binding:"required"`
+	Data  userDataOut    `json:"data" binding:"required"`
 	Token string         `json:"token" binding:"required"`
 	Extra map[string]any `json:"extra"`
 }
 
-type signinData struct {
-	Name  string   `json:"name" binding:"required"`
-	Email string   `json:"email" binding:"required,email"`
-	Data  userData `json:"data" binding:"required"`
-	Token string   `json:"token" binding:"required"`
+type signinOut struct {
+	Name  string      `json:"name" binding:"required"`
+	Email string      `json:"email" binding:"required,email"`
+	Data  userDataOut `json:"data" binding:"required"`
+	Token string      `json:"token" binding:"required"`
 }
 
-type newPasswordData struct {
-	Name  string   `json:"name" binding:"required"`
-	Email string   `json:"email" binding:"required,email"`
-	Data  userData `json:"data" binding:"required"`
-	Token string   `json:"token" binding:"required"`
+type newPasswordOut struct {
+	Name  string      `json:"name" binding:"required"`
+	Email string      `json:"email" binding:"required,email"`
+	Data  userDataOut `json:"data" binding:"required"`
+	Token string      `json:"token" binding:"required"`
 }
 
-type accountData struct {
+type accountOut struct {
 	Name string `json:"name" binding:"required"`
 }
 
-type userData struct {
-	Profile profileData `json:"profile" binding:"required"`
-	Tags    [][4]string `json:"tags" binding:"required"`
+type userDataOut struct {
+	Profile    profileData `json:"profile" binding:"required"`
+	Tags       [][4]string `json:"tags" binding:"required"`
+	ModifiedAt string      `json:"modified_at" binding:"required"`
 }
 
-type profileData map[string]any
-
-func defaultUserData() userData {
-	return userData{defaultProfile(), [][4]string{}}
+type profileData struct {
+	Data       map[string]any `json:"data" binding:"required"`
+	ModifiedAt string         `json:"modified_at" binding:"required"`
 }
 
-func newUserData(profile profileData) userData {
+type tagOut struct {
+	Name     string  `json:"name" binding:"required,min=1"`
+	Category string  `json:"category" binding:"required,min=1"`
+	Data     tagData `json:"data" binding:"required"`
+}
+
+type tagDataIn struct {
+	Data tagData `json:"data" binding:"required"`
+}
+
+type tagDataOut struct {
+	Data tagData `json:"data" binding:"required"`
+}
+
+type tagData map[string]any
+
+// type tagData struct {
+// 	Data map[string]any `json:"data" binding:"required"`
+// }
+
+func defaultUserData() userDataOut {
+	return userDataOut{defaultProfile(), [][4]string{}, time.Time{}.String()}
+}
+
+func newUserData(profile profileData) userDataOut {
 	d := defaultUserData()
 	d.Profile = profile
 	return d
 }
 
 func defaultProfile() profileData {
-	return map[string]any{}
+	return profileData{map[string]any{}, time.Time{}.String()}
 }
 
 func failPrefix(t *testing.T, depth int) string {
 	// flakey approach for printing file and line number
 	_, file, line, _ := runtime.Caller(depth + 1)
-	return fmt.Sprintf("%s (%s:%d)", t.Name(), file, line)
+	return fmt.Sprintf("%s %s:%d", t.Name(), file, line)
+}
+
+func pathWithParam(path, name, param string) string {
+	return strings.Replace(path, name, param, 1)
+}
+
+func pathWithQueryParam(path, param, value string) string {
+	return fmt.Sprintf("%s?%s=%s", path, param, value)
 }
 
 func clearTables(t *testing.T, tables ...string) {
 	if len(tables) == 0 {
-		tables = []string{"pending", "limiter", "users", "profiles", "sessions"}
+		tables = []string{
+			"pending",
+			"limiter",
+			"users",
+			"profiles",
+			"sessions",
+			"tag_catalog",
+			"tags",
+			"tag_events",
+		}
 	}
 	_, err := app.pool.Exec(
 		context.Background(),
@@ -363,19 +404,19 @@ func assertSessionCount(t *testing.T, want int) {
 	}
 }
 
-func setProfile(t *testing.T, user int, data map[string]any) {
-	_, err := app.pool.Exec(
-		context.Background(),
-		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
-	if err != nil {
-		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
-	}
-}
+// func setProfile(t *testing.T, user int, data map[string]any) {
+// 	_, err := app.pool.Exec(
+// 		context.Background(),
+// 		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
+// 	if err != nil {
+// 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+// 	}
+// }
 
-func updateProfile(t *testing.T, user int, data profileData) {
+func updateProfile(t *testing.T, user int, profile profileData) {
 	_, err := app.pool.Exec(
 		context.Background(),
-		`UPDATE profiles SET data = $1 WHERE id = $2;`, data, user)
+		`UPDATE profiles SET data = $1 WHERE id = $2;`, profile.Data, user)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
@@ -426,17 +467,22 @@ func addPendingResetPassword(t *testing.T, email string) string {
 	return id
 }
 
-func assertUserData(t *testing.T, got userData, want userData) {
-	gots := fmt.Sprintf("%v", got)
-	wants := fmt.Sprintf("%v", want)
+func assertUserData(t *testing.T, got userDataOut, want userDataOut) {
+	gots := fmt.Sprintf("%v", got.Profile.Data)
+	wants := fmt.Sprintf("%v", want.Profile.Data)
 	if gots != wants {
-		t.Fatalf("%s: data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+		t.Fatalf("%s: profile data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+	}
+	gots = fmt.Sprintf("%v", got.Tags)
+	wants = fmt.Sprintf("%v", want.Tags)
+	if gots != wants {
+		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}
 }
 
-func assertProfileInData(t *testing.T, got userData, want profileData) {
-	gots := fmt.Sprintf("%v", got.Profile)
-	wants := fmt.Sprintf("%v", want)
+func assertProfileInData(t *testing.T, got userDataOut, want profileData) {
+	gots := fmt.Sprintf("%v", got.Profile.Data)
+	wants := fmt.Sprintf("%v", want.Data)
 	if gots != wants {
 		t.Fatalf("%s: profile data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}
@@ -451,6 +497,66 @@ func assertEmail(t *testing.T, items []queueItem, id, email, lang string) {
 	if i.email != email || !strings.Contains(i.url, id) || i.lang != lang {
 		t.Fatalf("unexpected mailer data. Got %s, %s, %s. Want %s, %s, %s",
 			i.url, i.email, i.lang, id, email, lang)
+	}
+}
+
+func addTag(t *testing.T, name, category string, data map[string]any) (tag string) {
+	err := app.pool.QueryRow(context.Background(),
+		`INSERT INTO tags (name, category, data) VALUES ($1, $2, $3) RETURNING id;`,
+		name, category, data).Scan(&tag)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+
+	return tag
+}
+
+func getTag(t *testing.T, tag string) (name, category string, data map[string]any) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT name, category, data FROM tags WHERE id = $1;`, tag).Scan(&name, &category, &data)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return name, category, data
+}
+
+func getTagData(t *testing.T, tag string) (data tagData) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT data FROM tags WHERE id = $1;`, tag).Scan(&data)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return data
+}
+
+func assertTagCount(t *testing.T, want int) {
+	var count int
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT COUNT(id) FROM tags;`).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: counting tags. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
+}
+
+func assertTagOut(t *testing.T, got tagOut, want tagOut) {
+	gots := fmt.Sprintf("%v", got)
+	wants := fmt.Sprintf("%v", want)
+	if gots != wants {
+		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+	}
+}
+
+func assertTagDataOut(t *testing.T, got tagDataOut, want tagData) {
+	gots := fmt.Sprintf("%v", got.Data)
+	wants := fmt.Sprintf("%v", want)
+	if gots != wants {
+		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}
 }
 

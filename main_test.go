@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -41,14 +42,14 @@ func TestJoinCheck(t *testing.T) {
 	response := doPost(t, paths["joinCheck"], []byte(marshallAny(t, d1)), "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var jd joinCheckData
+	var jd joinCheckOut
 	err := json.Unmarshal(response.Body.Bytes(), &jd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall join check data: %s", err)
+		t.Fatalf("failed to unmarshall joinCheckOut data: %s", err)
 	}
 
 	if jd.Email != email {
-		t.Fatalf("unexpected email in join check data: Got %s. Want %s", jd.Email, email)
+		t.Fatalf("unexpected email in joinCheckOut data: Got %s. Want %s", jd.Email, email)
 	}
 }
 
@@ -75,16 +76,19 @@ func TestJoinCheckBadData(t *testing.T) {
 	}{
 		{``, 400},
 		{`{`, 400},
-		{`{}`, 400},                   // no email
-		{`{"foo": 123}`, 400},         // no email
-		{`{"email": ""}`, 400},        // empty email
-		{`{"email": "foo@bar"}`, 400}, // invalid email
+		{`{}`, 400},                       // no email
+		{`{"foo": 123}`, 400},             // no email
+		{`{"email": ""}`, 400},            // empty email
+		{`{"email": "foo@bar"}`, 400},     // invalid email
+		{`{"email": "foo@bar.com"}`, 200}, // ok
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["joinCheck"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -238,25 +242,25 @@ func TestJoinBadData(t *testing.T) {
 		{`{`, 400},
 		{`{}`, 400},
 		{`{"foo": 123}`, 400}, // no data
-		{`{"email": "a@b.com", "password": "p1"}`, 400},                              // no name
-		{`{"name":"", "email": "a@b.com", "password": "p1"}`, 400},                   // empty name
-		{`{"name":"John", "password": "p1"}`, 400},                                   // no email
-		{`{"name":"John", "email": "", "password": "p1"}`, 400},                      // empty email
-		{`{"name":"John", "email": "abc", "password": "p1"}`, 400},                   // invalid email
-		{`{"name":"John", "email": "a@b.com"}`, 400},                                 // no password
-		{`{"name":"John", "email": "a@b.com", "password": ""}`, 400},                 // empty password
-		{`{"name":"John", "email": "a@b.com", "password": "p1", "extra": }`, 400},    // invalid extra
-		{`{"name":"John", "email": "a@b.com", "password": "p1", "extra": {] }`, 400}, // invalid extra
-		{`{"name":"John", "email": "a@b.com", "password": "p1", "extra": 1}`, 400},   // invalid extra
-		{`{"name":"John", "email": "a@b.com", "password": "p1", "extra": ""}`, 400},  // invalid extra
+		{`{"email": "a@b.com", "password": "123"}`, 400},                                // no name
+		{`{"name":"", "email": "a@b.com", "password": "123"}`, 400},                     // empty name
+		{`{"name":"John", "password": "123"}`, 400},                                     // no email
+		{`{"name":"John", "email": "", "password": "123"}`, 400},                        // empty email
+		{`{"name":"John", "email": "abc", "password": "123"}`, 400},                     // invalid email
+		{`{"name":"John", "email": "a@b.com"}`, 400},                                    // no password
+		{`{"name":"John", "email": "a@b.com", "password": ""}`, 400},                    // empty password
+		{`{"name":"John", "email": "a@b.com", "password": "123", "extra": }`, 400},      // invalid extra
+		{`{"name":"John", "email": "a@b.com", "password": "123", "extra": {] }`, 400},   // invalid extra
+		{`{"name":"John", "email": "a@b.com", "password": "123", "extra": "url"}`, 201}, // ok
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["join"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
-	assertPendingJoinCount(t, 0)
 }
 
 // ******************************************************************
@@ -286,20 +290,20 @@ func TestJoinActivate(t *testing.T) {
 	user, _, hash := getUser(t, email)
 	session1 := getSession(t, user)
 
-	var jd joinActivateData
+	var jd joinActivateOut
 	err := json.Unmarshal(response.Body.Bytes(), &jd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall join activate data: %s", err)
+		t.Fatalf("failed to unmarshall joinActivateOut data: %s", err)
 	}
 
 	if jd.Name != name {
-		t.Fatalf("unexpected name in join activate data. Got %s. Want %s", jd.Name, name)
+		t.Fatalf("unexpected name in joinActivateOut data. Got %s. Want %s", jd.Name, name)
 	}
 	if jd.Email != email {
-		t.Fatalf("unexpected email in join activate data. Got %s. Want %s", jd.Email, email)
+		t.Fatalf("unexpected email in joinActivateOut data. Got %s. Want %s", jd.Email, email)
 	}
 	if jd.Token != session1 {
-		t.Fatalf("unexpected token in join activate data. Got %s. Want %s", jd.Token, session1)
+		t.Fatalf("unexpected token in joinActivateOut data. Got %s. Want %s", jd.Token, session1)
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
@@ -315,10 +319,11 @@ func TestJoinActivateExisting(t *testing.T) {
 	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
-	profile := map[string]any{
-		"gotagsavaruus": "yes",
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
 	}
-
 	// create user with name, email and password, set profile
 	user := addUser(t, name, email, password)
 	updateProfile(t, user, profile)
@@ -348,10 +353,10 @@ func TestJoinActivateExisting(t *testing.T) {
 	assertSessionCount(t, 1)
 	session := getSession(t, user)
 
-	var jd joinActivateData
+	var jd joinActivateOut
 	err := json.Unmarshal(response.Body.Bytes(), &jd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall join activate data: %s", err)
+		t.Fatalf("failed to unmarshall joinActivateOut data: %s", err)
 	}
 
 	// ensure current name is from join request
@@ -363,7 +368,7 @@ func TestJoinActivateExisting(t *testing.T) {
 
 	// ensure session in join session data is a new session
 	if jd.Token != session {
-		t.Fatalf("unexpected token in join activate data. Got %s. Want %s", jd.Token, session)
+		t.Fatalf("unexpected token in joinActivateOut data. Got %s. Want %s", jd.Token, session)
 	}
 
 	// ensure password is from join request
@@ -384,7 +389,7 @@ func TestJoinActivateFails(t *testing.T) {
 
 	// unknown id
 	d1 := map[string]string{
-		"id":       "0000000000",
+		"id":       "bf72f74b-6dbc-4d94-9b99-26413b3085e9",
 		"email":    email,
 		"password": password,
 	}
@@ -424,22 +429,26 @@ func TestJoinActivateBadData(t *testing.T) {
 		{`{`, 400},
 		{`{}`, 400},           // no data
 		{`{"foo": 123}`, 400}, // no data
-		{`{"email": "a@b.com", "password": "password1234"}`, 400},            // no id
-		{`{"id": 123, "email": "a@b.com", "password": "password1234"}`, 400}, // invalid id
-		{`{"id": "", "email": "a@b.com", "password": "password1234"}`, 400},  // empty id
-		{`{"id": "1234", "password": "password1234"}`, 400},                  // no email
-		{`{"id": "1234", "email": "", "password": "password1234"}`, 400},     // empty email
-		{`{"id": "1234", "email": 123, "password": "password1234"}`, 400},    // invalid email
-		{`{"id": "1234", "email": "hi", "password": "password1234"}`, 400},   // invalid email
-		{`{"id": "1234","email": "a@b.com"}`, 400},                           // no password
-		{`{"id": "1234","email": "a@b.com", "password": 123}`, 400},          // invalid password
-		{`{"id": "1234", "email": "a@b.com", "password": ""}`, 400},          // empty password
+		{`{"email": "a@b.com", "password": "password1234"}`, 400},                                               // no id
+		{`{"id": 123, "email": "a@b.com", "password": "password1234"}`, 400},                                    // invalid id
+		{`{"id": "", "email": "a@b.com", "password": "password1234"}`, 400},                                     // empty id
+		{`{"id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", "email": "a@b.com", "password": "password1234"}`, 400}, // invalid id format
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "password": "password1234"}`, 400},                     // no email
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "", "password": "password1234"}`, 400},        // empty email
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": 123, "password": "password1234"}`, 400},       // invalid email
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "hi", "password": "password1234"}`, 400},      // invalid email
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9","email": "a@b.com"}`, 400},                              // no password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9","email": "a@b.com", "password": 123}`, 400},             // invalid password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "a@b.com", "password": ""}`, 400},             // empty password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "a@b.com", "password": "123"}`, 404},          // data ok, not found
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["joinActivate"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -483,20 +492,20 @@ func TestJoinFlow(t *testing.T) {
 	assertProfileCount(t, 1)
 	assertSessionCount(t, 1)
 
-	var jd joinActivateData
+	var jd joinActivateOut
 	err := json.Unmarshal(response.Body.Bytes(), &jd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall join activate data: %s", err)
+		t.Fatalf("failed to unmarshall joinActivateOut data: %s", err)
 	}
 	if jd.Name != name || jd.Email != email {
-		t.Fatalf("invalid join activate data. Got %s, %s. Want %s, %s.", jd.Name, jd.Email, name, email)
+		t.Fatalf("invalid joinActivateOut data. Got %s, %s. Want %s, %s.", jd.Name, jd.Email, name, email)
 	}
 	assertUserData(t, jd.Data, defaultUserData())
 
 	extra1 := fmt.Sprint(extra)
 	extra2 := fmt.Sprint(jd.Extra)
 	if extra1 != extra2 {
-		t.Fatalf("invalid extra in join activate data. Got %s. Want %s.", extra2, extra1)
+		t.Fatalf("invalid extra in joinActivateOut data. Got %s. Want %s.", extra2, extra1)
 	}
 
 	// test join activate session token is valid
@@ -513,13 +522,13 @@ func TestJoinFlow(t *testing.T) {
 	checkResponseCode(t, response, http.StatusOK)
 
 	// check signin data
-	var sd signinData
+	var sd signinOut
 	err = json.Unmarshal(response.Body.Bytes(), &sd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall signin data: %s", err)
+		t.Fatalf("failed to unmarshall signingOut data: %s", err)
 	}
 	if sd.Name != name || sd.Email != email {
-		t.Fatalf("invalid signin data. Got %s, %s. Want %s, %s.", sd.Name, sd.Email, name, email)
+		t.Fatalf("invalid signinOut data. Got %s, %s. Want %s, %s.", sd.Name, sd.Email, name, email)
 	}
 
 	// ensure join activate data and signin data match
@@ -551,16 +560,16 @@ func TestSignin(t *testing.T) {
 	assertSessionCount(t, 1)
 	session := getSession(t, user)
 
-	var sd signinData
+	var sd signinOut
 	err := json.Unmarshal(response.Body.Bytes(), &sd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall signin data: %s", err)
+		t.Fatalf("failed to unmarshall signinOut data: %s", err)
 	}
 	if sd.Name != name || sd.Email != email {
-		t.Fatalf("unexpected signin data: Got %s, %s. Want %s, %s", sd.Name, sd.Email, name, email)
+		t.Fatalf("unexpected signinOut data: Got %s, %s. Want %s, %s", sd.Name, sd.Email, name, email)
 	}
 	if sd.Token != session {
-		t.Fatalf("unexpected session token in signin data: Got %s. Want %s", sd.Token, session)
+		t.Fatalf("unexpected session token in signinOut data: Got %s. Want %s", sd.Token, session)
 	}
 	assertUserData(t, sd.Data, defaultUserData())
 }
@@ -571,8 +580,10 @@ func TestSigninData(t *testing.T) {
 	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
-	profile := map[string]any{
-		"gotagsavaruus": "yes",
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
 	}
 
 	user := addUser(t, name, email, password)
@@ -585,10 +596,10 @@ func TestSigninData(t *testing.T) {
 	response := doPost(t, paths["signin"], []byte(marshallAny(t, d1)), "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var sd signinData
+	var sd signinOut
 	err := json.Unmarshal(response.Body.Bytes(), &sd)
 	if err != nil {
-		t.Fatalf("Failed to unmarshall signin data: %s", err)
+		t.Fatalf("Failed to unmarshall signinOut data: %s", err)
 	}
 
 	assertUserData(t, sd.Data, newUserData(profile))
@@ -631,18 +642,21 @@ func TestSigninBadData(t *testing.T) {
 		{`{`, 400},
 		{`{}`, 400},                           // no data
 		{`{"password": "password1234"}`, 400}, // no email
-		{`{"email": "", "password": "password1234"}`, 400},        // empty email
-		{`{"email": 123, "password": "password1234"}`, 400},       // unexpected email
-		{`{"email": "foo@bar", "password": "password1234"}`, 400}, // invalid email
-		{`{"email": "1234"}`, 400},                                // no password
-		{`{"email": "1234", "password": ""}`, 400},                // empty password
-		{`{"email": "1234", "password": 123}`, 400},               // unexpected password
+		{`{"email": 123, "password": "password1234"}`, 400},           // unexpected email
+		{`{"email": "", "password": "password1234"}`, 400},            // empty email
+		{`{"email": "foo@bar", "password": "password1234"}`, 400},     // invalid email
+		{`{"email": "foo@bar.com"}`, 400},                             // no password
+		{`{"email": "foo@bar.com", "password": 123}`, 400},            // unexpected password
+		{`{"email": "foo@bar.com", "password": ""}`, 400},             // empty password
+		{`{"email": "foo@bar.com", "password": "password1234"}`, 401}, // data ok, unauthorized
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["signin"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -701,13 +715,16 @@ func TestResetPasswordBadData(t *testing.T) {
 		{`{"email": 123}`, 400},   // invalid email
 		{`{"email": ""}`, 400},    // empty email
 		{`{"email": "a@b"}`, 400}, // incorrect email
-		{`{"email": "a@b.com", "lang": 123}`, 400}, // invalid lang
+		{`{"email": "a@foo.com", "lang": 123}`, 400},  // invalid lang
+		{`{"email": "a@foo.com", "lang": "en"}`, 404}, // ok, not found
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["resetPassword"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -719,8 +736,10 @@ func TestNewPassword(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 	newPassword := "password9876"
-	profile := map[string]any{
-		"gotagsavaruus": "yes",
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
 	}
 
 	user := addUser(t, name, email, password)
@@ -738,10 +757,10 @@ func TestNewPassword(t *testing.T) {
 
 	assertPendingResetPasswordCount(t, 0)
 
-	var pd newPasswordData
+	var pd newPasswordOut
 	err := json.Unmarshal(response.Body.Bytes(), &pd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall new password data: %s", err)
+		t.Fatalf("failed to unmarshall newPasswordOut data: %s", err)
 	}
 	assertProfileInData(t, pd.Data, profile)
 
@@ -764,7 +783,7 @@ func TestNewPasswordFails(t *testing.T) {
 
 	// unknown id
 	d1 := map[string]string{
-		"id":       "0000000000",
+		"id":       "bf72f74b-6dbc-4d94-9b99-26413b3085e9",
 		"email":    email,
 		"password": password,
 	}
@@ -804,22 +823,25 @@ func TestNewPasswordBadData(t *testing.T) {
 		{`{`, 400},
 		{`{}`, 400},           // no data
 		{`{"foo": 123}`, 400}, // no data
-		{`{"email": "a@b.com", "password": "password1234"}`, 400},              // no id
-		{`{"id": 123, "email": "a@b.com", "password": "password1234"}`, 400},   // invalid id
-		{`{"id": "", "email": "a@b.com", "password": "password1234"}`, 400},    // empty id
-		{`{id": "1234", "password": "password1234"}`, 400},                     // no email
-		{`{id": "1234", "email": 123, "password": "password1234"}`, 400},       // invalid email
-		{`{id": "1234", "email": "", "password": "password1234"}`, 400},        // empty email
-		{`{id": "1234", "email": "invalid", "password": "password1234"}`, 400}, // incorrect email
-		{`{"id": "1234","email": "a@b.com", }`, 400},                           // no password
-		{`{"id": "1234", "email": "a@b.com", "password": 123}`, 400},           // invalid password
-		{`{"id": "1234", "email": "a@b.com", "password": ""}`, 400},            // empty password
+		{`{"email": "a@foo.com", "password": "password1234"}`, 400},                                               // no id
+		{`{"id": 123, "email": "a@foo.com", "password": "password1234"}`, 400},                                    // invalid id
+		{`{"id": "", "email": "a@foo.com", "password": "password1234"}`, 400},                                     // empty id
+		{`{id": "", "password": "password1234"}`, 400},                                                            // no email
+		{`{id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": 123, "password": "password1234"}`, 400},          // invalid email
+		{`{id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "", "password": "password1234"}`, 400},           // empty email
+		{`{id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "invalid", "password": "password1234"}`, 400},    // incorrect email
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9","email": "a@foo.com", }`, 400},                            // no password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "a@foo.com", "password": 123}`, 400},            // invalid password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "a@foo.com", "password": ""}`, 400},             // empty password
+		{`{"id": "bf72f74b-6dbc-4d94-9b99-26413b3085e9", "email": "a@foo.com", "password": "password1234"}`, 404}, // ok, not found
 	}
 
 	for _, d := range data {
 		response := doPost(t, paths["newPassword"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -833,8 +855,10 @@ func TestResetPasswordFlow(t *testing.T) {
 	password := "password1234"
 	newPassword := "password9876"
 	lang := "en"
-	profile := map[string]any{
-		"gotagsavaruus": "yes",
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
 	}
 
 	user := addUser(t, name, email, password)
@@ -857,10 +881,10 @@ func TestResetPasswordFlow(t *testing.T) {
 	response = doPost(t, paths["newPassword"], []byte(marshallAny(t, d2)), "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var pd newPasswordData
+	var pd newPasswordOut
 	err := json.Unmarshal(response.Body.Bytes(), &pd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall new password data: %s", err)
+		t.Fatalf("failed to unmarshall newPasswordOut data: %s", err)
 	}
 	assertUserData(t, pd.Data, newUserData(profile))
 
@@ -872,10 +896,10 @@ func TestResetPasswordFlow(t *testing.T) {
 	response = doPost(t, paths["signin"], []byte(marshallAny(t, d3)), "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var sd signinData
+	var sd signinOut
 	err = json.Unmarshal(response.Body.Bytes(), &sd)
 	if err != nil {
-		t.Fatalf("failed to unmarshall signin data: %s", err)
+		t.Fatalf("failed to unmarshall signinOut data: %s", err)
 	}
 }
 
@@ -921,7 +945,7 @@ func TestRenewSessionFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doPatch(t, paths["auth_session"], nil, "0000000000")
+	response = doPatch(t, paths["auth_session"], nil, "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 }
 
@@ -969,13 +993,13 @@ func TestGetAccount(t *testing.T) {
 	response := doGet(t, paths["auth_account"], session)
 	checkResponseCode(t, response, http.StatusOK)
 
-	var ad accountData
+	var ad accountOut
 	err := json.Unmarshal(response.Body.Bytes(), &ad)
 	if err != nil {
-		t.Fatalf("failed to unmarshall account data: %s", err)
+		t.Fatalf("failed to unmarshall accountOut data: %s", err)
 	}
 	if ad.Name != name {
-		t.Fatalf("unexpected name in account data. Got %s. Want %s.", ad.Name, name)
+		t.Fatalf("unexpected name in accountOut data. Got %s. Want %s.", ad.Name, name)
 	}
 }
 
@@ -987,7 +1011,7 @@ func TestGetAccountFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doGet(t, paths["auth_account"], "0000000000")
+	response = doGet(t, paths["auth_account"], "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 }
 
@@ -1028,7 +1052,7 @@ func TestUpdateAccountFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doPut(t, paths["auth_account"], []byte(marshallAny(t, d1)), "0000000000")
+	response = doPut(t, paths["auth_account"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 }
 
@@ -1048,16 +1072,19 @@ func TestUpdateAccountBadData(t *testing.T) {
 	}{
 		{``, 400},
 		{`{`, 400},
-		{`{}`, 400},            // no data
-		{`{"foo": 123}`, 400},  // no data
-		{`{"name": 123}`, 400}, // invalid name
-		{`{"name": ""}`, 400},  // empty name
+		{`{}`, 400},               // no data
+		{`{"foo": 123}`, 400},     // no data
+		{`{"name": 123}`, 400},    // invalid name
+		{`{"name": ""}`, 400},     // empty name
+		{`{"name": "John"}`, 200}, // ok
 	}
 
 	for _, d := range data {
 		response := doPut(t, paths["auth_account"], []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
@@ -1101,6 +1128,10 @@ func TestDeleteAccountFails(t *testing.T) {
 		"password": password,
 	}
 	response := doDelete(t, paths["auth_account"], []byte(marshallAny(t, d)), "")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid session
+	response = doPut(t, paths["auth_account"], []byte(marshallAny(t, d)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// Test no password
@@ -1158,20 +1189,23 @@ func TestDeleteAccountBadData(t *testing.T) {
 	for _, d := range data {
 		response := doDelete(t, paths["auth_account"], []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
+		if d.code >= 400 {
+			checkResponseBody(t, response, "")
+		}
 	}
 }
 
 // ******************************************************************
-func TestGetUserData(t *testing.T) {
+func TestGetData(t *testing.T) {
 	clearTables(t)
 
 	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
-	profile := map[string]any{
-		"value":   "gotagsavaruus",
-		"counter": 32,
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
 	}
 
 	user := addUser(t, name, email, password)
@@ -1181,16 +1215,16 @@ func TestGetUserData(t *testing.T) {
 	response := doGet(t, paths["auth_data"], session)
 	checkResponseCode(t, response, http.StatusOK)
 
-	var ud userData
+	var ud userDataOut
 	err := json.Unmarshal(response.Body.Bytes(), &ud)
 	if err != nil {
-		t.Fatalf("Failed to unmarshall profile token: %s", err)
+		t.Fatalf("Failed to unmarshall userDataOut data: %s", err)
 	}
 
 	assertUserData(t, ud, newUserData(profile))
 }
 
-func TestGetUserDataFails(t *testing.T) {
+func TestGetDataFails(t *testing.T) {
 	clearTables(t)
 
 	// no session
@@ -1198,9 +1232,118 @@ func TestGetUserDataFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doGet(t, paths["auth_data"], "0000000000")
+	response = doGet(t, paths["auth_data"], "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 }
+
+// ******************************************************************
+func TestUpdateProfile(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
+	}
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	// get user data for valid profile modified_at
+	response := doGet(t, paths["auth_data"], session)
+	checkResponseCode(t, response, http.StatusOK)
+
+	var ud userDataOut
+	err := json.Unmarshal(response.Body.Bytes(), &ud)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall userDataOut data: %s", err)
+	}
+
+	assertUserData(t, ud, defaultUserData())
+
+	// update profile
+	d1 := map[string]any{
+		"profile":     profile.Data,
+		"modified_at": ud.Profile.ModifiedAt,
+	}
+	response = doPost(t, paths["auth_data_profile"], []byte(marshallAny(t, d1)), session)
+	checkResponseCode(t, response, http.StatusOK)
+
+	err = json.Unmarshal(response.Body.Bytes(), &ud)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall userDataOut data: %s", err)
+	}
+
+	assertUserData(t, ud, newUserData(profile))
+}
+
+func TestUpdateProfileFails(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	profile := profileData{
+		Data: map[string]any{
+			"gotagsavaruus": "yes",
+		},
+	}
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	d1 := map[string]any{
+		"profile":     profile.Data,
+		"modified_at": time.Now().AddDate(0, 0, -1),
+	}
+	// no session
+	response := doPost(t, paths["auth_data_profile"], []byte(marshallAny(t, d1)), "")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid session
+	response = doPost(t, paths["auth_data_profile"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid timestamp
+	response = doPost(t, paths["auth_data_profile"], []byte(marshallAny(t, d1)), session)
+	checkResponseCode(t, response, http.StatusConflict)
+}
+
+// func TestUpdatePasswordBadData(t *testing.T) {
+// 	clearTables(t)
+
+// 	name := "John Doe"
+// 	email := "johndoe@example.com"
+// 	password := "password1234"
+
+// 	user := addUser(t, name, email, password)
+// 	session := addSession(t, user)
+
+// 	var data = [...]struct {
+// 		data string
+// 		code int
+// 	}{
+// 		{``, 400},
+// 		{`{`, 400},
+// 		{`{}`, 400},                              // no data
+// 		{`{"foo": 123}`, 400},                    // no data
+// 		{`{"newPassword": "1234password"}`, 400}, // no password
+// 		{`{"password": 123, "newPassword": "1234password"}`, 400}, // invalid password
+// 		{`{"password": "", "newPassword": "1234password"}`, 400},  // invalid password
+// 		{`{"password": "password1234"}`, 400},                     // no new password
+// 		{`{"password": "password1234", "newPassword": 123}`, 400}, // invalid new password
+// 		{`{"password": "password1234", "newPassword": ""}`, 400},  // invalid new password
+// 	}
+
+// 	for _, d := range data {
+// 		response := doPost(t, paths["auth_password"], []byte(d.data), session)
+// 		checkResponseCode(t, response, d.code)
+// 		checkResponseBody(t, response, "")
+// 	}
+// }
 
 // ******************************************************************
 func TestUpdatePassword(t *testing.T) {
@@ -1251,7 +1394,7 @@ func TestUpdatePasswordFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "0000000000")
+	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid password
@@ -1291,6 +1434,184 @@ func TestUpdatePasswordBadData(t *testing.T) {
 
 	for _, d := range data {
 		response := doPost(t, paths["auth_password"], []byte(d.data), session)
+		checkResponseCode(t, response, d.code)
+		checkResponseBody(t, response, "")
+	}
+}
+
+// ******************************************************************
+func TestGetTag(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	tname := "tag1"
+	tcategory := "nop"
+	tdata := tagData{}
+	tag := addTag(t, tname, tcategory, tdata)
+	assertTagCount(t, 1)
+
+	p := pathWithParam(paths["auth_tags"], ":id", tag)
+	response := doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusOK)
+
+	var td tagOut
+	err := json.Unmarshal(response.Body.Bytes(), &td)
+	if err != nil {
+		t.Fatalf("Failed to unmarshall tagOut data: %s", err)
+	}
+
+	assertTagOut(t, td, tagOut{tname, tcategory, tdata})
+}
+
+func TestGetTagFails(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	tname := "tag1"
+	tcategory := "nop"
+	tdata := tagData{}
+	tag := addTag(t, tname, tcategory, tdata)
+
+	// invalid session
+	p := pathWithParam(paths["auth_tags"], ":id", tag)
+	response := doGet(t, p, "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid tag id
+	p = pathWithParam(paths["auth_tags"], ":id", "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	response = doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusNotFound)
+}
+
+func TestGetTagBadData(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	// bad tag id
+	p := pathWithParam(paths["auth_tags"], ":id", "hello")
+	response := doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusBadRequest)
+
+	// bad tag id
+	p = pathWithParam(paths["auth_tags"], ":id", "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
+	response = doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusBadRequest)
+}
+
+// ******************************************************************
+func TestUpdateTag(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	tname := "tag1"
+	tcategory := "nop"
+	d1 := tagDataIn{map[string]any{
+		"value": 42,
+	}}
+	tag := addTag(t, tname, tcategory, d1.Data)
+
+	p := pathWithParam(paths["auth_tags"], ":id", tag)
+	response := doPut(t, p, []byte(marshallAny(t, d1)), session)
+	checkResponseCode(t, response, http.StatusOK)
+
+	var jd tagDataOut
+	err := json.Unmarshal(response.Body.Bytes(), &jd)
+	if err != nil {
+		t.Fatalf("failed to unmarshall tagDataOut data: %s", err)
+	}
+
+	assertTagDataOut(t, jd, d1.Data)
+	assertTagDataOut(t, jd, getTagData(t, tag))
+}
+
+func TestUpdateTagFails(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	tname := "tag1"
+	tcategory := "nop"
+	d1 := tagDataIn{map[string]any{
+		"value": 42,
+	}}
+	tag := addTag(t, tname, tcategory, d1.Data)
+
+	// invalid session
+	p := pathWithParam(paths["auth_tags"], ":id", tag)
+	response := doPut(t, p, []byte(marshallAny(t, d1)), "")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid tag
+	p = pathWithParam(paths["auth_tags"], ":id", "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	response = doPut(t, p, []byte(marshallAny(t, d1)), session)
+	checkResponseCode(t, response, http.StatusNotFound)
+}
+
+func TestUpdateTagBadData(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	// bad tag id
+	p := pathWithParam(paths["auth_tags"], ":id", "hello")
+	response := doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusBadRequest)
+
+	// bad tag id
+	p = pathWithParam(paths["auth_tags"], ":id", "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
+	response = doGet(t, p, session)
+	checkResponseCode(t, response, http.StatusBadRequest)
+
+	var data = [...]struct {
+		data string
+		code int
+	}{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},                // no data
+		{`{"foo": 123}`, 400},      // no data
+		{`{"data":}`, 400},         // no data
+		{`{"data": 123}`, 400},     // invalid data
+		{`{"data": "hello"}`, 400}, // invalid data
+	}
+
+	p = pathWithParam(paths["auth_tags"], ":id", "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	for _, d := range data {
+		response := doPut(t, p, []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
 		checkResponseBody(t, response, "")
 	}
