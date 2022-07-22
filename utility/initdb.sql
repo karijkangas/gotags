@@ -58,30 +58,19 @@ $$ language sql;
 
 -- ********** pending **********
 
--- DROP TYPE IF EXISTS pending_category CASCADE;
--- CREATE TYPE pending_category AS ENUM ('join', 'reset_password', 'change_email');
-
 CREATE TABLE IF NOT EXISTS pending (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   email TEXT NOT NULL,
   category TEXT NOT NULL,
-  -- category pending_category,
   data JSONB not null default '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE default current_timestamp
-  -- modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp
 );
-
--- DROP TRIGGER IF EXISTS set_pending_timestamp ON pending;
-
--- CREATE TRIGGER set_pending_timestamp
--- BEFORE UPDATE ON pending
--- FOR EACH ROW
--- EXECUTE FUNCTION trigger_update_modified_at();
 
 CREATE OR REPLACE FUNCTION check_pending_capacity()
   RETURNS TRIGGER AS $$
 BEGIN
-  IF (SELECT count(*) FROM pending as p1 WHERE p1.email = NEW.email) >= get_pending_limit()
+  IF (SELECT count(*) FROM pending as p1
+      WHERE p1.email = NEW.email) >= get_pending_limit()
   THEN
     RAISE EXCEPTION 'pending: no capacity';
   END IF;
@@ -104,43 +93,6 @@ CREATE TABLE IF NOT EXISTS limiter (
 
 ALTER SEQUENCE limiter_id_seq RESTART;
 CREATE UNIQUE INDEX IF NOT EXISTS limiter_idx ON limiter(email, counter);
-
--- CREATE OR REPLACE FUNCTION pending_limiter_set_counter() RETURNS TRIGGER AS
--- $BODY$
---     DECLARE
---         row_count integer;
---     BEGIN
---         SELECT count(*) INTO row_count FROM pending_limiter WHERE email = NEW.email;
---         IF row_count = 0 THEN
---             NEW.counter = 1;
---             RETURN NEW;
---         ELSE
---             NEW.counter = row_count + 1;
---             RETURN NEW;
---         END IF;
---     END;
--- $BODY$ LANGUAGE plpgsql;
-
--- CREATE TRIGGER pending_limiter_set_counter
---   BEFORE INSERT ON pending_limiter
---   FOR EACH
---   ROW EXECUTE PROCEDURE pending_limiter_set_counter();
-
--- CREATE OR REPLACE FUNCTION copy_email_to_email_counter() RETURNS TRIGGER AS
--- $BODY$
--- BEGIN
---     INSERT INTO email_counter(email) VALUES(NEW.email);
---     RETURN new;
--- END;
--- $BODY$
--- language plpgsql;
-
--- DROP TRIGGER IF EXISTS copy_email_to_email_counter ON pending;
-
--- CREATE TRIGGER copy_email_to_email_counter
---      AFTER INSERT ON pending
---      FOR EACH ROW
---      EXECUTE PROCEDURE copy_email_to_email_counter()();
 
 -- ********** users **********
 
@@ -205,6 +157,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- CREATE TRIGGER set_sessions_timestamp
+-- BEFORE UPDATE ON sessions
+-- FOR EACH ROW
+-- EXECUTE FUNCTION trigger_update_modified_at();
+
 CREATE OR REPLACE FUNCTION check_sessions_capacity()
   RETURNS TRIGGER AS $$
 BEGIN
@@ -247,12 +204,29 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE TABLE IF NOT EXISTS tag_events (
   user_id INTEGER,
-  tag_id UUID,
+  tag_id UUID NOT NULL,
   category TEXT NOT NULL,   -- 'connected', 'accessed', 'acted_on'
   event_at TIMESTAMP WITH TIME ZONE default current_timestamp,
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_tag FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+  -- UNIQUE (user_id, tag_id, category)
+  -- CONSTRAINT tag_events_pkey PRIMARY KEY (user_id, tag_id, category)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS tag_events_idx ON tag_events (user_id, tag_id, category);
+
+-- CREATE OR REPLACE FUNCTION trigger_update_event_at()
+-- RETURNS TRIGGER AS $$
+-- BEGIN
+--   NEW.event_at = current_timestamp;
+--   RETURN NEW;
+-- END;
+-- $$ LANGUAGE plpgsql;
+
+-- CREATE TRIGGER set_tag_events_event_at
+-- BEFORE UPDATE ON tag_events
+-- FOR EACH ROW
+-- EXECUTE FUNCTION trigger_update_event_at();
 
 -- -- ********** profile keys **********
 -- CREATE TABLE IF NOT EXISTS profile_keys (

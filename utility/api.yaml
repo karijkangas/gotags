@@ -386,7 +386,7 @@ paths:
   /auth/your-data/tags:
     post:
       description: |
-        Add tags to user data.
+        Connect tags to user.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -395,12 +395,12 @@ paths:
           name: data
           required: true
           schema:
-            $ref: "#/definitions/INUserTags"
+            $ref: "#/definitions/INConnectTags"
       produces:
         - application/json
       responses:
         "200":
-          description: User data tags updated
+          description: Tags connected
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
@@ -415,7 +415,7 @@ paths:
         - authorized
     delete:
       description: |
-        Remove tags from your data.
+        Disconnect tags from user.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -424,12 +424,12 @@ paths:
           name: data
           required: true
           schema:
-            $ref: "#/definitions/INDeleteUserTag"
+            $ref: "#/definitions/INDisconnectTags"
       produces:
         - application/json
       responses:
         "200":
-          description: User data tags updated
+          description: Tags disconnected
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
@@ -723,13 +723,43 @@ definitions:
         items:
           type: array
           items:
-            type: string
-          minItems: 4
-          maxItems: 4
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              category:
+                type: string
+              modified:
+                type: string
+              connected:
+                type: string
+              accessed:
+                type: string
+              acted_on:
+                type: string
+            required:
+              - id
+              - name
+              - category
+              - modified
+              - connected
+              - accessed
+              - acted_on
     required:
       - profile
       - tags
-  INDeleteProfileTag:
+  INConnectTags:
+    type: object
+    properties:
+      tags:
+        type: array
+        items:
+          type: string
+    required:
+      - tags
+  INDisconnectTags:
     type: object
     properties:
       tags:
@@ -759,10 +789,13 @@ definitions:
         type: string
       data:
         type: object
+      modified_at:
+        type: string
     required:
       - name
       - category
       - data
+      - modified_at
   INTagData:
     type: object
     properties:

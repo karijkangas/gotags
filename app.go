@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgconn"
@@ -82,7 +83,7 @@ func (a *GoTags) auth() gin.HandlerFunc {
 			return
 		}
 
-		c.Set("user", user)
+		// c.Set("user", user)
 		c.Set("session", Session{user, token})
 		c.Next()
 	}
@@ -212,40 +213,100 @@ func queryProfileDataTx(tx pgx.Tx, user int) (data map[string]any, modifiedAt ti
 	return data, modifiedAt, err
 }
 
-func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
-	// get cached data from db/redis?
+type tagrow struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	Modified  string `json:"modified"`
+	Connected string `json:"connected"`
+	Accessed  string `json:"accessed"`
+	ActedOn   string `json:"acted_on"`
+}
 
+type byConnected []tagrow
+
+func (t byConnected) Len() int {
+	return len(t)
+}
+func (t byConnected) Swap(i, j int) {
+	t[i], t[j] = t[j], t[i]
+}
+func (t byConnected) Less(i, j int) bool {
+	ti := t[i].Connected
+	tj := t[j].Connected
+	return ti < tj
+}
+
+func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT t.id, t.name, t.category, t.modified_at, te.category, te.event_at
+		 FROM tag_events te INNER JOIN tags t ON tag_id = id
+		 WHERE user_id = $1;`,
+		user)
+	defer rows.Close()
+
+	tagmap := map[string]tagrow{}
+	for rows.Next() {
+		var id, name, category, modified, event, eventAt string
+		err = rows.Scan(&id, &name, &category, &modified, &event, &eventAt)
+		if err == nil {
+			if _, ok := tagmap[id]; !ok {
+				tagmap[id] = tagrow{}
+			}
+			t := tagmap[id]
+			t.ID = id
+			t.Name = name
+			t.Modified = modified
+			t.Category = category
+
+			switch event {
+			case "connected":
+				t.Connected = eventAt
+			case "accessed":
+				t.Accessed = eventAt
+			case "acted_on":
+				t.ActedOn = eventAt
+			default:
+				log.Fatal("unexpected tag event", event)
+			}
+		} else {
+			return nil, err
+		}
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	rows.Close()
+
+	tagrows := make([]tagrow, 0, len(tagmap))
+	for k := range tagmap {
+		tagrows = append(tagrows, tagmap[k])
+	}
+
+	// sort first connected tag first
+	sort.Sort(byConnected(tagrows))
+
+	return tagrows, nil
+}
+
+func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
 	profileData, m, err := queryProfileDataTx(tx, user)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := queryTagsTx(tx, user)
+	if err != nil {
+		return nil, err
+	}
+
 	return map[string]any{
 		"profile": map[string]any{
 			"data":        profileData,
 			"modified_at": m,
 		},
-		"tags": [][4]string{},
-	}, err
-	// var tags []string
-	// userTags, err := tx.Query(
-	// 	context.Background(),
-	// 	`SELECT (tag_id, event_at) FROM tag_events
-	// 	 WHERE user_id = $1 AND category == 'connected'
-	// 	 ORDER BY event_at ASC;`,
-	// 	user)
-
-	// accessed := tx.QueryRow(
-	// 	context.Background(),
-	// 	`SELECT (tag_id, event_at) FROM tag_events
-	// 	 WHERE user_id = $1 AND category == 'accessed'
-	// 	 ORDER BY event_at DESC
-	// 	 LIMIT 1;`,
-	// 	user)
-
-	// actedOn, err = tx.QueryRow(
-	// 	context.Background(),
-	// 	`SELECT (tag_id, event_at) FROM tag_events
-	// 	 WHERE user_id = $1 AND category == 'acted_on'
-	// 	 ORDER BY event_at DESC
-	// 	 LIMIT 1;`,
-	// 	user)
+		"tags": tags,
+	}, nil
 }
 
 // ******************************************************************
@@ -489,15 +550,6 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 		}
 	}
 
-	// switch {
-	// case err == pgx.ErrNoRows:
-	// 	c.Status(http.StatusTooManyRequests)
-	// 	return
-	// case err != nil:
-	// 	c.Status(http.StatusInternalServerError)
-	// 	return
-	// }
-
 	userData, err := a.queryUserDataTx(tx, user)
 	switch {
 	case err == pgx.ErrNoRows:
@@ -598,15 +650,6 @@ func (a *GoTags) signin(c *gin.Context) {
 			return
 		}
 	}
-
-	// switch {
-	// case err == pgx.ErrNoRows:
-	// 	c.Status(http.StatusTooManyRequests)
-	// 	return
-	// case err != nil:
-	// 	c.Status(http.StatusInternalServerError)
-	// 	return
-	// }
 
 	userData, err := a.queryUserDataTx(tx, user)
 	switch {
@@ -844,15 +887,6 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		}
 	}
 
-	// switch {
-	// case err == pgx.ErrNoRows:
-	// 	c.Status(http.StatusTooManyRequests)
-	// 	return
-	// case err != nil:
-	// 	c.Status(http.StatusInternalServerError)
-	// 	return
-	// }
-
 	userData, err := a.queryUserDataTx(tx, user)
 	switch {
 	case err == pgx.ErrNoRows:
@@ -1076,7 +1110,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 
 	var d struct {
 		Profile    map[string]any `json:"profile" binding:"required"`
-		ModifiedAt string         `json:"modified_at" binding:"required,min=1"`
+		ModifiedAt string         `json:"modified_at" binding:"required,datetime=2006-01-02T15:04:05Z07:00"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1123,30 +1157,115 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 
 //
 func (a *GoTags) connectTags(c *gin.Context) {
-	// session := currentSession(c)
-	// id := c.GetInt("user")
+	session := currentSession(c)
 
-	// data, err := a.queryProfileData(session.User)
-	// if err != nil {
-	// 	c.Status(http.StatusGone)
-	// 	return
-	// }
-	// c.JSON(http.StatusOK, gin.H{"data": data})
-	c.Status(http.StatusOK)
+	var d struct {
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	user := session.User
+	tags := d.Tags
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	b := &pgx.Batch{}
+
+	for _, t := range tags {
+		b.Queue(`INSERT INTO tag_event (user_id, tag_id, category, event_at)
+				 VALUES ($1, $2, 'connected', current_timestamp)
+				 ON CONFLICT (user_id, tag_id, category, event_at) DO UPDATE
+				 SET event_at=EXCLUDED.event_at;`, user, t)
+	}
+
+	r := tx.SendBatch(context.Background(), b)
+	defer r.Close()
+
+	for range tags {
+		t, err := r.Exec()
+		switch {
+		case t.RowsAffected() == 0:
+			c.Status(http.StatusNotFound)
+			return
+		case err != nil:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+	}
+	r.Close()
+
+	data, err := a.queryUserDataTx(tx, session.User)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, data)
 }
 
 //
 func (a *GoTags) disconnectTags(c *gin.Context) {
-	// session := currentSession(c)
-	// // id := c.GetInt("user")
+	session := currentSession(c)
 
-	// data, err := a.queryProfileData(session.User)
-	// if err != nil {
-	// 	c.Status(http.StatusGone)
-	// 	return
-	// }
-	// c.JSON(http.StatusOK, gin.H{"data": data})
-	c.Status(http.StatusOK)
+	var d struct {
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	user := session.User
+	tags := d.Tags
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	_, err = tx.Exec(
+		context.Background(),
+		`DELETE FROM tag_events WHERE user_id = $1 AND tag_id IN $2`, user, tags)
+	switch {
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+		// case t.RowsAffected() == 0:
+		// 	c.Status(http.StatusGone)
+		// 	return
+	}
+
+	data, err := a.queryUserDataTx(tx, session.User)
+	if err != nil {
+		c.Status(http.StatusGone)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, data)
 }
 
 //
@@ -1250,15 +1369,24 @@ func (a *GoTags) getTag(c *gin.Context) {
 
 	var name, category string
 	var data map[string]any
-	b := &pgx.Batch{}
-	b.Queue(`SELECT name,category,data FROM tags WHERE id = $1;`, tag)
-	b.Queue(`INSERT INTO tag_events (user_id,tag_id,category) VALUES ($1,$2,'accessed');`, session.User, tag)
+	var modifiedAt time.Time
 
+	b := &pgx.Batch{}
+
+	// 1
+	b.Queue(`SELECT name, category, data, modified_at FROM tags WHERE id = $1;`, tag)
+
+	// 2
+	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
+	         VALUES ($1, $2, 'accessed', current_timestamp)
+			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
+			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
+	// 1
 	row := r.QueryRow()
-	err = row.Scan(&name, &category, &data)
+	err = row.Scan(&name, &category, &data, &modifiedAt)
 	switch {
 	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
@@ -1268,6 +1396,7 @@ func (a *GoTags) getTag(c *gin.Context) {
 		return
 	}
 
+	// 2
 	t, err := r.Exec()
 	switch {
 	case t.RowsAffected() == 0:
@@ -1287,9 +1416,10 @@ func (a *GoTags) getTag(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"name":     name,
-		"category": category,
-		"data":     data,
+		"name":        name,
+		"category":    category,
+		"data":        data,
+		"modified_at": modifiedAt,
 	})
 }
 
@@ -1358,8 +1488,13 @@ func (a *GoTags) updateTag(c *gin.Context) {
 	newData := f(currentData, updateData)
 
 	b := &pgx.Batch{}
+
 	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2;`, newData, tag)
-	b.Queue(`INSERT INTO tag_events (user_id,tag_id,category) VALUES ($1, $2,'accessed');`, session.User, tag)
+
+	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
+			 VALUES ($1, $2, 'acted_on', current_timestamp)
+			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
+			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
 
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()

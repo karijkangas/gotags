@@ -446,9 +446,7 @@ func TestJoinActivateBadData(t *testing.T) {
 	for _, d := range data {
 		response := doPost(t, paths["joinActivate"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		if d.code >= 400 {
-			checkResponseBody(t, response, "")
-		}
+		checkResponseBody(t, response, "")
 	}
 }
 
@@ -654,9 +652,7 @@ func TestSigninBadData(t *testing.T) {
 	for _, d := range data {
 		response := doPost(t, paths["signin"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		if d.code >= 400 {
-			checkResponseBody(t, response, "")
-		}
+		checkResponseBody(t, response, "")
 	}
 }
 
@@ -722,9 +718,7 @@ func TestResetPasswordBadData(t *testing.T) {
 	for _, d := range data {
 		response := doPost(t, paths["resetPassword"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		if d.code >= 400 {
-			checkResponseBody(t, response, "")
-		}
+		checkResponseBody(t, response, "")
 	}
 }
 
@@ -839,9 +833,7 @@ func TestNewPasswordBadData(t *testing.T) {
 	for _, d := range data {
 		response := doPost(t, paths["newPassword"], []byte(d.data), "")
 		checkResponseCode(t, response, d.code)
-		if d.code >= 400 {
-			checkResponseBody(t, response, "")
-		}
+		checkResponseBody(t, response, "")
 	}
 }
 
@@ -1189,9 +1181,7 @@ func TestDeleteAccountBadData(t *testing.T) {
 	for _, d := range data {
 		response := doDelete(t, paths["auth_account"], []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
-		if d.code >= 400 {
-			checkResponseBody(t, response, "")
-		}
+		checkResponseBody(t, response, "")
 	}
 }
 
@@ -1312,38 +1302,37 @@ func TestUpdateProfileFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusConflict)
 }
 
-// func TestUpdatePasswordBadData(t *testing.T) {
-// 	clearTables(t)
+func TestUpdateProfileBadData(t *testing.T) {
+	clearTables(t)
 
-// 	name := "John Doe"
-// 	email := "johndoe@example.com"
-// 	password := "password1234"
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
 
-// 	user := addUser(t, name, email, password)
-// 	session := addSession(t, user)
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
 
-// 	var data = [...]struct {
-// 		data string
-// 		code int
-// 	}{
-// 		{``, 400},
-// 		{`{`, 400},
-// 		{`{}`, 400},                              // no data
-// 		{`{"foo": 123}`, 400},                    // no data
-// 		{`{"newPassword": "1234password"}`, 400}, // no password
-// 		{`{"password": 123, "newPassword": "1234password"}`, 400}, // invalid password
-// 		{`{"password": "", "newPassword": "1234password"}`, 400},  // invalid password
-// 		{`{"password": "password1234"}`, 400},                     // no new password
-// 		{`{"password": "password1234", "newPassword": 123}`, 400}, // invalid new password
-// 		{`{"password": "password1234", "newPassword": ""}`, 400},  // invalid new password
-// 	}
+	var data = [...]struct {
+		data string
+		code int
+	}{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},           // no data
+		{`{"foo": 123}`, 400}, // no data
+		{`{"profile": "", "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400},  // invalid profile
+		{`{"profile": 123, "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400}, // invalid profile
+		{`{"profile": {}, "modified_at": 123}`, 400},                          // invalid modified_at
+		{`{"profile": {}, "modified_at": ""}`, 400},                           // invalid modified_at
+		{`{"profile": {}, "modified_at": "2006-01-02T15:04"}`, 400},           // invalid modified_at
+	}
 
-// 	for _, d := range data {
-// 		response := doPost(t, paths["auth_password"], []byte(d.data), session)
-// 		checkResponseCode(t, response, d.code)
-// 		checkResponseBody(t, response, "")
-// 	}
-// }
+	for _, d := range data {
+		response := doPost(t, paths["auth_data_profile"], []byte(d.data), session)
+		checkResponseCode(t, response, d.code)
+		checkResponseBody(t, response, "")
+	}
+}
 
 // ******************************************************************
 func TestUpdatePassword(t *testing.T) {
@@ -1466,7 +1455,7 @@ func TestGetTag(t *testing.T) {
 		t.Fatalf("Failed to unmarshall tagOut data: %s", err)
 	}
 
-	assertTagOut(t, td, tagOut{tname, tcategory, tdata})
+	assertTagOut(t, td, tagOut{tname, tcategory, tdata, ""})
 }
 
 func TestGetTagFails(t *testing.T) {
@@ -1586,14 +1575,21 @@ func TestUpdateTagBadData(t *testing.T) {
 	user := addUser(t, name, email, password)
 	session := addSession(t, user)
 
+	// tname := "tag1"
+	// tcategory := "nop"
+	d1 := tagDataIn{map[string]any{
+		"value": 42,
+	}}
+	// tag := addTag(t, tname, tcategory, d1.Data)
+
 	// bad tag id
 	p := pathWithParam(paths["auth_tags"], ":id", "hello")
-	response := doGet(t, p, session)
+	response := doPut(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusBadRequest)
 
 	// bad tag id
 	p = pathWithParam(paths["auth_tags"], ":id", "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
-	response = doGet(t, p, session)
+	response = doPut(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusBadRequest)
 
 	var data = [...]struct {

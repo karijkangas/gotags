@@ -74,9 +74,10 @@ type profileData struct {
 }
 
 type tagOut struct {
-	Name     string  `json:"name" binding:"required,min=1"`
-	Category string  `json:"category" binding:"required,min=1"`
-	Data     tagData `json:"data" binding:"required"`
+	Name       string  `json:"name" binding:"required,min=1"`
+	Category   string  `json:"category" binding:"required,min=1"`
+	Data       tagData `json:"data" binding:"required"`
+	ModifiedAt string  `json:"modified_at" binding:"required"`
 }
 
 type tagDataIn struct {
@@ -545,8 +546,12 @@ func assertTagCount(t *testing.T, want int) {
 }
 
 func assertTagOut(t *testing.T, got tagOut, want tagOut) {
+	temp := got.ModifiedAt
+	// TODO: validate got.ModifiedAt
+	got.ModifiedAt = ""
 	gots := fmt.Sprintf("%v", got)
 	wants := fmt.Sprintf("%v", want)
+	got.ModifiedAt = temp
 	if gots != wants {
 		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}
