@@ -44,6 +44,7 @@ var paths = map[string]string{
 	"auth_data":         "/api/auth/your-data",
 	"auth_data_profile": "/api/auth/your-data/profile",
 	"auth_data_tags":    "/api/auth/your-data/tags",
+	"auth_data_tags_dc": "/api/auth/your-data/tags/dc",
 	"auth_password":     "/api/auth/password",
 	"auth_tags":         "/api/auth/tags/:id",
 	// debug api
@@ -160,7 +161,7 @@ func (a *GoTags) initialize(databaseURL string) {
 		authorized.GET(paths["auth_data"], a.getData)
 		authorized.POST(paths["auth_data_profile"], a.updateProfile)
 		authorized.POST(paths["auth_data_tags"], a.connectTags)
-		authorized.DELETE(paths["auth_data_tags"], a.disconnectTags)
+		authorized.POST(paths["auth_data_tags_dc"], a.disconnectTags)
 		authorized.POST(paths["auth_password"], a.updatePassword)
 		authorized.GET(paths["auth_tags"], a.getTag)
 		authorized.POST(paths["auth_tags"], a.updateTag)

@@ -1098,6 +1098,102 @@ func TestDeleteSessionFails(t *testing.T) {
 }
 
 // ******************************************************************
+func TestUpdatePassword(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	newPassword := "1234password"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	d1 := map[string]string{
+		"password":    password,
+		"newPassword": newPassword,
+	}
+	response := doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), session)
+	checkResponseCode(t, response, http.StatusOK)
+	checkResponseBody(t, response, "")
+
+	// check password has changed
+	_, _, passwordHash := getUserByID(t, user)
+
+	err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(newPassword))
+	if err != nil {
+		t.Fatalf("unexpected password")
+	}
+}
+
+func TestUpdatePasswordFails(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+	newPassword := "1234password"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	d1 := map[string]string{
+		"password":    password,
+		"newPassword": newPassword,
+	}
+	// no session
+	response := doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid session
+	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	checkResponseCode(t, response, http.StatusUnauthorized)
+
+	// invalid password
+	d2 := map[string]string{
+		"password":    newPassword,
+		"newPassword": newPassword,
+	}
+	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d2)), session)
+	checkResponseCode(t, response, http.StatusConflict)
+}
+
+func TestUpdatePasswordBadData(t *testing.T) {
+	clearTables(t)
+
+	name := "John Doe"
+	email := "johndoe@example.com"
+	password := "password1234"
+
+	user := addUser(t, name, email, password)
+	session := addSession(t, user)
+
+	var data = [...]struct {
+		data string
+		code int
+	}{
+		{``, 400},
+		{`{`, 400},
+		{`{}`, 400},                              // no data
+		{`{"foo": 123}`, 400},                    // no data
+		{`{"newPassword": "1234password"}`, 400}, // no password
+		{`{"password": 123, "newPassword": "1234password"}`, 400},                              // invalid password
+		{`{"password": "", "newPassword": "1234password"}`, 400},                               // invalid password
+		{`{"password": "password1234"}`, 400},                                                  // no new password
+		{`{"password": "password1234", "newPassword": 123}`, 400},                              // invalid new password
+		{`{"password": "password1234", "newPassword": ""}`, 400},                               // invalid new password
+		{fmt.Sprintf(`{"password": "%s", "newPassword": "1234password"}`, longString(1)), 400}, // too long password
+		{fmt.Sprintf(`{"password": "password1234", "newPassword": "%s"}`, longString(1)), 400}, // too long new password
+	}
+
+	for _, d := range data {
+		response := doPost(t, paths["auth_password"], []byte(d.data), session)
+		checkResponseCode(t, response, d.code)
+		checkResponseBody(t, response, "")
+	}
+}
+
+// ******************************************************************
 func TestGetAccount(t *testing.T) {
 	clearTables(t)
 
@@ -1646,7 +1742,7 @@ func TestDisconnectTags(t *testing.T) {
 	d1 := map[string]any{
 		"tags": []string{tag1},
 	}
-	response := doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d1)), session)
+	response := doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusOK)
 
 	var ud1 userDataOut
@@ -1680,7 +1776,7 @@ func TestDisconnectTagsMultiple(t *testing.T) {
 	d1 := map[string]any{
 		"tags": []string{tag1, tag3},
 	}
-	response := doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d1)), session)
+	response := doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 1)
 
@@ -1711,7 +1807,7 @@ func TestDisconnectTagsUnexpected(t *testing.T) {
 	d1 := map[string]any{
 		"tags": []string{"bf72f74b-6dbc-4d94-9b99-26413b3085e9"},
 	}
-	response := doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d1)), session)
+	response := doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 2)
 
@@ -1719,7 +1815,7 @@ func TestDisconnectTagsUnexpected(t *testing.T) {
 	d2 := map[string]any{
 		"tags": []string{tag1, "bf72f74b-6dbc-4d94-9b99-26413b3085e9"},
 	}
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d2)), session)
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d2)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 1)
 
@@ -1727,7 +1823,7 @@ func TestDisconnectTagsUnexpected(t *testing.T) {
 	d3 := map[string]any{
 		"tags": []string{tag1},
 	}
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d3)), session)
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d3)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 1)
 }
@@ -1751,18 +1847,18 @@ func TestDisconnectTagsFails(t *testing.T) {
 		"tags": []string{tag1},
 	}
 	// no session
-	response := doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d1)), "")
+	response := doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d1)), "")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid tag id
 	d2 := map[string]any{
 		"tags": []string{"bf72f74b-6dbc-4d94-9b99-26413b3085e9"},
 	}
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d2)), session)
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d2)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 2)
 
@@ -1770,7 +1866,7 @@ func TestDisconnectTagsFails(t *testing.T) {
 	d3 := map[string]any{
 		"tags": []string{tag1, "bf72f74b-6dbc-4d94-9b99-26413b3085e9", tag2},
 	}
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d3)), session)
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d3)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 0)
 
@@ -1778,7 +1874,7 @@ func TestDisconnectTagsFails(t *testing.T) {
 	d4 := map[string]any{
 		"tags": []string{tag1},
 	}
-	response = doDelete(t, paths["auth_data_tags"], []byte(marshallAny(t, d4)), session)
+	response = doPost(t, paths["auth_data_tags_dc"], []byte(marshallAny(t, d4)), session)
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 0)
 }
@@ -1809,103 +1905,7 @@ func TestDisconnectTagsBadData(t *testing.T) {
 	}
 
 	for _, d := range data {
-		response := doDelete(t, paths["auth_data_tags"], []byte(d.data), session)
-		checkResponseCode(t, response, d.code)
-		checkResponseBody(t, response, "")
-	}
-}
-
-// ******************************************************************
-func TestUpdatePassword(t *testing.T) {
-	clearTables(t)
-
-	name := "John Doe"
-	email := "johndoe@example.com"
-	password := "password1234"
-	newPassword := "1234password"
-
-	user := addUser(t, name, email, password)
-	session := addSession(t, user)
-
-	d1 := map[string]string{
-		"password":    password,
-		"newPassword": newPassword,
-	}
-	response := doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), session)
-	checkResponseCode(t, response, http.StatusOK)
-	checkResponseBody(t, response, "")
-
-	// check password has changed
-	_, _, passwordHash := getUserByID(t, user)
-
-	err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(newPassword))
-	if err != nil {
-		t.Fatalf("unexpected password")
-	}
-}
-
-func TestUpdatePasswordFails(t *testing.T) {
-	clearTables(t)
-
-	name := "John Doe"
-	email := "johndoe@example.com"
-	password := "password1234"
-	newPassword := "1234password"
-
-	user := addUser(t, name, email, password)
-	session := addSession(t, user)
-
-	d1 := map[string]string{
-		"password":    password,
-		"newPassword": newPassword,
-	}
-	// no session
-	response := doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "")
-	checkResponseCode(t, response, http.StatusUnauthorized)
-
-	// invalid session
-	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d1)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
-	checkResponseCode(t, response, http.StatusUnauthorized)
-
-	// invalid password
-	d2 := map[string]string{
-		"password":    newPassword,
-		"newPassword": newPassword,
-	}
-	response = doPost(t, paths["auth_password"], []byte(marshallAny(t, d2)), session)
-	checkResponseCode(t, response, http.StatusConflict)
-}
-
-func TestUpdatePasswordBadData(t *testing.T) {
-	clearTables(t)
-
-	name := "John Doe"
-	email := "johndoe@example.com"
-	password := "password1234"
-
-	user := addUser(t, name, email, password)
-	session := addSession(t, user)
-
-	var data = [...]struct {
-		data string
-		code int
-	}{
-		{``, 400},
-		{`{`, 400},
-		{`{}`, 400},                              // no data
-		{`{"foo": 123}`, 400},                    // no data
-		{`{"newPassword": "1234password"}`, 400}, // no password
-		{`{"password": 123, "newPassword": "1234password"}`, 400},                              // invalid password
-		{`{"password": "", "newPassword": "1234password"}`, 400},                               // invalid password
-		{`{"password": "password1234"}`, 400},                                                  // no new password
-		{`{"password": "password1234", "newPassword": 123}`, 400},                              // invalid new password
-		{`{"password": "password1234", "newPassword": ""}`, 400},                               // invalid new password
-		{fmt.Sprintf(`{"password": "%s", "newPassword": "1234password"}`, longString(1)), 400}, // too long password
-		{fmt.Sprintf(`{"password": "password1234", "newPassword": "%s"}`, longString(1)), 400}, // too long new password
-	}
-
-	for _, d := range data {
-		response := doPost(t, paths["auth_password"], []byte(d.data), session)
+		response := doPost(t, paths["auth_data_tags_dc"], []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
 		checkResponseBody(t, response, "")
 	}

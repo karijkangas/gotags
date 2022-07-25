@@ -447,7 +447,8 @@ paths:
           description: Failed, user gone?
       tags:
         - authorized
-    delete:
+  /auth/your-data/tags/dc:
+    post:
       description: |
         Disconnect tags from user.
 
