@@ -159,40 +159,11 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 	for i := range data {
 		email1, name1, password1, _, extra1 := data[i]["email"], data[i]["name"], data[i]["password"], data[i]["lang"], data[i]["extra"]
 		id2, email2, name2, hash2, extra2 := joins[i]["id"], joins[i]["email"], joins[i]["name"], joins[i]["password_hash"], joins[i]["extra"]
-		// email1 := data[i]["email"].(string)
-		// name1 := data[i]["name"].(string)
-		// password1 := data[i]["password"].(string)
-
-		// x1 := data[i]["extra"]
-		// var extra1 any
-		// if x1 != nil {
-		// 	extra1 = x1
-		// } else {
-		// 	extra1 = nil
-		// }
-
-		// j := joins[i]
-		// id2 := j["id"].(string)
-		// email2 := j["email"].(string)
-		// name2 := j["name"].(string)
-		// hash2 := j["password_hash"].(string)
 
 		k := got.Pending[i]
 		d := k.Data
 
 		id3, email3, name3, hash3, extra3 := k.ID, k.Email, d["name"], d["password_hash"], d["extra"]
-
-		// id3 := k.ID
-		// email3 := k.Email
-		// name3 := d["name"].(string)
-		// hash3 := d["password_hash"].(string)
-		// var extra3 any
-
-		// if x1 != nil {
-		// 	extra3 = d["extra"]
-		// } else {
-		// 	extra3 = nil
-		// }
 
 		if id2 != id3 {
 			t.Fatalf("#%d: Unexpected id in join data. Got %s. Want %s", i, id3, id2)
@@ -209,18 +180,8 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 		if bcrypt.CompareHashAndPassword([]byte(hash3), []byte(password1)) != nil {
 			t.Fatalf("#%d: unexpected password hash in join", i)
 		}
-		// if lang2 != lang1 || lang3 != lang1 {
-		// 	t.Fatalf("#%d: unexpected lang in join data. Got %s. Want %s", i, lang3, lang1)
-		// }
 		if extra2 != extra1 || extra3 != extra1 {
 			t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, extra3, extra1)
 		}
-
-		// e1 := fmt.Sprintf("%v", extra1)
-		// e3 := fmt.Sprintf("%v", extra3)
-
-		// if e3 != e1 {
-		// 	t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, e3, e1)
-		// }
 	}
 }

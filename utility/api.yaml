@@ -2,7 +2,7 @@ swagger: "2.0"
 info:
   contact:
     name: Kari Kangas (karijkangas@gmail.com)
-  description: "Data consists of 3 parts: (name, email) account data, user data, and token. With extra, join carries the original link over email. Maximum body size 10240 bytes."
+  description: "Data consists of 3 parts: {name, email} account data, user data, and token. With extra, join carries the original link over email. Maximum body size 10240 bytes, fields max 1024."
   license:
     name: MIT
   title: Gotagsavaruus REST API
@@ -63,11 +63,11 @@ paths:
 
         Sends an email with a link and instructions how to verify and activate account.
 
-        Ignored requests are purged from the database after a time-to-live (TTL) period.
+        Ignored requests are purged from the database after a time-to-live (ttl) period.
 
         The number of pending requests is limited per email address.
 
-        The number of requests in total within a time frame is limited per email address.
+        The number of requests in total within a time-frame is limited per email address.
       parameters:
         - description: Input data
           in: body
@@ -131,7 +131,9 @@ paths:
 
         The number of active sessions per email address is limited.
 
-        Session has a time-to-live. A session can be renewed, reseting its TTL counter.
+        A session has a time-to-live (ttl) counter.
+        A session becomes void once ttl counter reaches zero.
+        A session can be renewed, which resets its ttl counter.
       parameters:
         - description: Input data
           in: body
@@ -163,7 +165,7 @@ paths:
 
         Ignored requests are purged from the database after a time-to-live period.
 
-        The number of requests in total within a time period is limited per email address.
+        The number of requests in total within a time-frame is limited per email address.
       parameters:
         - description: Input data
           in: body
@@ -191,7 +193,7 @@ paths:
 
         Removes the reset password request from the database.
 
-        Email must match the email in the request.
+        Email must match the email in the request. ["Password UI"]
 
         Starts a session and returns a token, see /signin.
       parameters:
