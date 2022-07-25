@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -21,14 +24,70 @@ type queueItem struct {
 	email, url, lang string
 }
 
-var mailerOutput struct {
+var testmailerData struct {
+	mu    sync.Mutex
 	queue []queueItem
+	err   error
 }
 
-func resetMailer() []queueItem {
-	q := mailerOutput.queue
-	mailerOutput.queue = []queueItem{}
+func testEmailer(e, u, l string) error {
+	testmailerData.mu.Lock()
+	defer testmailerData.mu.Unlock()
+
+	testmailerData.queue = append(testmailerData.queue, queueItem{e, u, l})
+	return testmailerData.err
+}
+
+func setEmailer(err error) {
+	resetEmailer()
+
+	testmailerData.mu.Lock()
+	defer testmailerData.mu.Unlock()
+
+	testmailerData.err = err
+}
+
+func resetEmailer() []queueItem {
+	testmailerData.mu.Lock()
+	defer testmailerData.mu.Unlock()
+
+	q := testmailerData.queue
+	testmailerData.queue = []queueItem{}
+	testmailerData.err = nil
 	return q
+}
+
+var testEmailValidatorData struct {
+	mu     sync.Mutex
+	emails []string
+	status bool
+}
+
+func testEmailValidator(pool *pgxpool.Pool, email string) bool {
+	testEmailValidatorData.mu.Lock()
+	defer testEmailValidatorData.mu.Unlock()
+
+	testEmailValidatorData.emails = append(testEmailValidatorData.emails, email)
+	return testEmailValidatorData.status
+}
+
+func setEmailValidator(status bool) {
+	resetEmailValidator()
+
+	testEmailValidatorData.mu.Lock()
+	defer testEmailValidatorData.mu.Unlock()
+
+	testEmailValidatorData.status = status
+}
+
+func resetEmailValidator() []string {
+	testEmailValidatorData.mu.Lock()
+	defer testEmailValidatorData.mu.Unlock()
+
+	v := testEmailValidatorData.emails
+	testEmailValidatorData.emails = []string{}
+	testEmailValidatorData.status = true
+	return v
 }
 
 // data structures for API output
@@ -37,11 +96,11 @@ type joinCheckOut struct {
 }
 
 type joinActivateOut struct {
-	Name  string         `json:"name" binding:"required"`
-	Email string         `json:"email" binding:"required,email"`
-	Data  userDataOut    `json:"data" binding:"required"`
-	Token string         `json:"token" binding:"required"`
-	Extra map[string]any `json:"extra"`
+	Name  string      `json:"name" binding:"required"`
+	Email string      `json:"email" binding:"required,email"`
+	Data  userDataOut `json:"data" binding:"required"`
+	Token string      `json:"token" binding:"required"`
+	Extra string      `json:"extra"`
 }
 
 type signinOut struct {
@@ -64,13 +123,23 @@ type accountOut struct {
 
 type userDataOut struct {
 	Profile    profileData `json:"profile" binding:"required"`
-	Tags       [][4]string `json:"tags" binding:"required"`
+	Tags       []tagStatus `json:"tags" binding:"required"`
 	ModifiedAt string      `json:"modified_at" binding:"required"`
 }
 
 type profileData struct {
 	Data       map[string]any `json:"data" binding:"required"`
 	ModifiedAt string         `json:"modified_at" binding:"required"`
+}
+
+type tagStatus struct {
+	ID        string `json:"id" binding:"required,uuid"`
+	Name      string `json:"name" binding:"required,min=1"`
+	Category  string `json:"category" binding:"required,min=1"`
+	Modified  string `json:"modified" binding:"required,min=1"`
+	Connected string `json:"connected"`
+	Accessed  string `json:"accessed"`
+	ActedOn   string `json:"acted_on"`
 }
 
 type tagOut struct {
@@ -80,6 +149,8 @@ type tagOut struct {
 	ModifiedAt string  `json:"modified_at" binding:"required"`
 }
 
+type tagData map[string]any
+
 type tagDataIn struct {
 	Data tagData `json:"data" binding:"required"`
 }
@@ -88,19 +159,58 @@ type tagDataOut struct {
 	Data tagData `json:"data" binding:"required"`
 }
 
-type tagData map[string]any
-
 // type tagData struct {
 // 	Data map[string]any `json:"data" binding:"required"`
 // }
 
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randomString(n int) string {
+	str := make([]rune, n)
+	for i := range str {
+		str[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(str)
+}
+
+func longString(n int) string {
+	const limit = 1024
+	return randomString(limit + n)
+	// str := make([]rune, limit+n)
+
+	// for i := range str {
+	// 	str[i] = letters[rand.Intn(len(letters))]
+	// }
+	// return string(str)
+}
+
+func longEmail(n int) string {
+	const domain = "@example.com"
+	account := longString(n - len(domain))
+	return account + domain
+}
+
 func defaultUserData() userDataOut {
-	return userDataOut{defaultProfile(), [][4]string{}, time.Time{}.String()}
+	return userDataOut{defaultProfile(), []tagStatus{}, time.Time{}.String()}
 }
 
 func newUserData(profile profileData) userDataOut {
 	d := defaultUserData()
 	d.Profile = profile
+	return d
+}
+
+func tagStatuses(tags []string) []tagStatus {
+	s := []tagStatus{}
+	for _, t := range tags {
+		s = append(s, tagStatus{ID: t})
+	}
+	return s
+}
+
+func newUserDataWithTags(profile profileData, tags []string) userDataOut {
+	d := newUserData(profile)
+	d.Tags = tagStatuses(tags)
 	return d
 }
 
@@ -239,11 +349,13 @@ func getPending(t *testing.T, category string) (id, email string, data map[strin
 	return
 }
 
-func getPendingJoin(t *testing.T) (id, name, email, passwordHash string, extra any) {
+func getPendingJoin(t *testing.T) (id, name, email, passwordHash, extra string) {
 	id, email, data := getPending(t, "join")
 	name = data["name"].(string)
 	passwordHash = data["password_hash"].(string)
-	extra = data["extra"]
+	if data["extra"] != nil {
+		extra = data["extra"].(string)
+	}
 	return id, name, email, passwordHash, extra
 }
 
@@ -252,7 +364,7 @@ func getPendingResetPassword(t *testing.T) (id, email string) {
 	return id, email
 }
 
-func getAllPending(t *testing.T, category string) (result []map[string]any) {
+func getAllPending(t *testing.T, category string) (result []map[string]string) {
 	rows, err := app.pool.Query(
 		context.Background(),
 		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s' ORDER BY created_at ASC;`, category),
@@ -264,14 +376,14 @@ func getAllPending(t *testing.T, category string) (result []map[string]any) {
 
 	for rows.Next() {
 		var id, email string
-		d := map[string]any{}
+		d := map[string]string{}
 		err = rows.Scan(&id, &email, &d)
 		if err != nil {
 			t.Fatalf("%s: query failed: %s.", failPrefix(t, 2), err)
 		}
-		if d == nil {
-			d = map[string]any{}
-		}
+		// if d == nil {
+		// 	d = map[string]string{}
+		// }
 		d["id"] = id
 		d["email"] = email
 		result = append(result, d)
@@ -280,11 +392,11 @@ func getAllPending(t *testing.T, category string) (result []map[string]any) {
 	return result
 }
 
-func getPendingJoins(t *testing.T) (result []map[string]any) {
+func getPendingJoins(t *testing.T) (result []map[string]string) {
 	return getAllPending(t, "join")
 }
 
-func getPendingPasswordResets(t *testing.T) (result []map[string]any) {
+func getPendingPasswordResets(t *testing.T) (result []map[string]string) {
 	return getAllPending(t, "reset_password")
 }
 
@@ -322,6 +434,32 @@ func assertPendingJoinCount(t *testing.T, want int) {
 }
 func assertPendingResetPasswordCount(t *testing.T, want int) {
 	assertPendingCount(t, "reset_password", want)
+}
+
+func getLimiter(t *testing.T) (id int, email string) {
+	row := app.pool.QueryRow(
+		context.Background(),
+		`SELECT id, email FROM limiter;`,
+	)
+	err := row.Scan(&id, &email)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 2), err)
+	}
+	return id, email
+}
+
+func assertLimiterCount(t *testing.T, want int) {
+	var count int
+
+	err := app.pool.QueryRow(
+		context.Background(),
+		fmt.Sprintf(`SELECT COUNT(id) FROM limiter;`)).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: counting limiter items. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
 }
 
 func addUser(t *testing.T, name, email, password string) (user int) {
@@ -405,15 +543,6 @@ func assertSessionCount(t *testing.T, want int) {
 	}
 }
 
-// func setProfile(t *testing.T, user int, data map[string]any) {
-// 	_, err := app.pool.Exec(
-// 		context.Background(),
-// 		`INSERT INTO profiles (id, data) VALUES ($1, $2);`, user, data)
-// 	if err != nil {
-// 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
-// 	}
-// }
-
 func updateProfile(t *testing.T, user int, profile profileData) {
 	_, err := app.pool.Exec(
 		context.Background(),
@@ -468,17 +597,82 @@ func addPendingResetPassword(t *testing.T, email string) string {
 	return id
 }
 
-func assertUserData(t *testing.T, got userDataOut, want userDataOut) {
+func assertUserDataProfile(t *testing.T, got userDataOut, want userDataOut) {
 	gots := fmt.Sprintf("%v", got.Profile.Data)
 	wants := fmt.Sprintf("%v", want.Profile.Data)
 	if gots != wants {
-		t.Fatalf("%s: profile data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
+		t.Fatalf("%s: profile data does not match: Got %s. Want %s", failPrefix(t, 2), gots, wants)
 	}
-	gots = fmt.Sprintf("%v", got.Tags)
-	wants = fmt.Sprintf("%v", want.Tags)
+}
+
+func tagIds(d userDataOut) []string {
+	ids := []string{}
+	for _, t := range d.Tags {
+		ids = append(ids, t.ID)
+	}
+	return ids
+}
+
+func assertUserData(t *testing.T, got userDataOut, want userDataOut) {
+	assertUserDataProfile(t, got, want)
+	assertUserDataTags(t, got, tagIds(want))
+}
+
+func assertUserDataInDetail(t *testing.T, got userDataOut, want userDataOut) {
+	assertUserDataProfile(t, got, want)
+
+	gots := fmt.Sprintf("%v", got.Tags)
+	wants := fmt.Sprintf("%v", want.Tags)
 	if gots != wants {
 		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}
+}
+
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func assertUserDataTags(t *testing.T, got userDataOut, want []string) {
+	if len(got.Tags) != len(want) {
+		t.Fatalf("%s: unexpected number of tags. Got %d. Want %d", failPrefix(t, 1), len(got.Tags), len(want))
+	}
+	for _, tag := range got.Tags {
+		if !contains(want, tag.ID) {
+			t.Fatalf("%s: unexpected tag %s", failPrefix(t, 1), tag.ID)
+
+		}
+	}
+}
+
+func assertUserDataTagAccessed(t *testing.T, got userDataOut, tag string) {
+	for _, tt := range got.Tags {
+		if tt.ID == tag {
+			if tt.Accessed == "" {
+				t.Fatalf("%s: tag %s = %v not accessed", failPrefix(t, 1), tag, tt)
+			} else {
+				return
+			}
+		}
+	}
+	t.Fatalf("%s: tag %s not found", failPrefix(t, 1), tag)
+}
+
+func assertUserDataTagActedOn(t *testing.T, got userDataOut, tag string) {
+	for _, tt := range got.Tags {
+		if tt.ID == tag {
+			if tt.ActedOn == "" {
+				t.Fatalf("%s: tag %s = %v not acted on", failPrefix(t, 1), tag, tt)
+			} else {
+				return
+			}
+		}
+	}
+	t.Fatalf("%s: tag %s not found", failPrefix(t, 1), tag)
 }
 
 func assertProfileInData(t *testing.T, got userDataOut, want profileData) {
@@ -489,15 +683,26 @@ func assertProfileInData(t *testing.T, got userDataOut, want profileData) {
 	}
 }
 
-func assertEmail(t *testing.T, items []queueItem, id, email, lang string) {
+func assertMailer(t *testing.T, items []queueItem, id, email, lang string) {
 	if len(items) != 1 {
-		t.Fatalf("too many items. Got %d. Want 1", len(items))
+		t.Fatalf("wrong number of items. Got %d. Want 1", len(items))
 
 	}
 	i := items[0]
 	if i.email != email || !strings.Contains(i.url, id) || i.lang != lang {
 		t.Fatalf("unexpected mailer data. Got %s, %s, %s. Want %s, %s, %s",
 			i.url, i.email, i.lang, id, email, lang)
+	}
+}
+
+func assertValidator(t *testing.T, emails []string, email string) {
+	if len(emails) != 1 {
+		t.Fatalf("wrong number of items. Got %d. Want 1", len(emails))
+
+	}
+	if emails[0] != email {
+		t.Fatalf("unexpected validator data. Got %s. Want %s",
+			emails[0], email)
 	}
 }
 
@@ -532,11 +737,73 @@ func getTagData(t *testing.T, tag string) (data tagData) {
 	return data
 }
 
+func assertTagsEqual(t *testing.T, tag1, tag2 tagStatus) {
+	if tag1 != tag2 {
+		t.Fatalf("%s: tags not equal. Tag1 %v. Tag2 %v", failPrefix(t, 1), tag1, tag2)
+	}
+}
+
+func assertTagsConnected(t *testing.T, tags []tagStatus) {
+	for _, tag := range tags {
+		if tag.Connected == "" || tag.Accessed != "" || tag.ActedOn != "" {
+			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		}
+	}
+}
+
+func assertTagConnected(t *testing.T, tags ...tagStatus) {
+	for _, tag := range tags {
+		if tag.Connected == "" || tag.Accessed != "" || tag.ActedOn != "" {
+			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		}
+	}
+}
+
+func assertTagAccessed(t *testing.T, tags ...tagStatus) {
+	for _, tag := range tags {
+		if tag.Accessed == "" {
+			t.Fatalf("%s: tag not accessed %s", failPrefix(t, 1), tag)
+		}
+	}
+}
+
+func assertTagActedOn(t *testing.T, tags ...tagStatus) {
+	for _, tag := range tags {
+		if tag.ActedOn == "" {
+			t.Fatalf("%s: tag not acted on %s", failPrefix(t, 1), tag)
+		}
+	}
+}
+
 func assertTagCount(t *testing.T, want int) {
 	var count int
 	err := app.pool.QueryRow(
 		context.Background(),
 		`SELECT COUNT(id) FROM tags;`).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: counting tags. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
+}
+
+func addUserTag(t *testing.T, user int, tag string, eventAt time.Time) {
+	_, err := app.pool.Exec(context.Background(),
+		`INSERT INTO tag_events (user_id, tag_id, category, event_at)
+		 VALUES ($1, $2, 'connected', $3);`,
+		user, tag, eventAt)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+}
+
+func assertUserTagCount(t *testing.T, user int, want int) {
+	var count int
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT COUNT(tag_id) FROM tag_events
+		 WHERE user_id = $1 AND category = 'connected';`, user).Scan(&count)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
@@ -565,10 +832,10 @@ func assertTagDataOut(t *testing.T, got tagDataOut, want tagData) {
 	}
 }
 
-func setLimits(t *testing.T, pending, sessions int) {
+func setLimits(t *testing.T, pending, sessions, emails int) {
 	_, err := app.pool.Exec(
 		context.Background(),
-		`UPDATE limits SET pending = $1, sessions = $2 WHERE id=1;`, pending, sessions)
+		`UPDATE limits SET pending = $1, sessions = $2, emails = $3 WHERE id=1;`, pending, sessions, emails)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
@@ -592,20 +859,27 @@ func renewSession(t *testing.T, session string, modifiedAt time.Time) {
 	}
 }
 
-func fromTTLs(t *testing.T, addDays int) (pending, sessions time.Time) {
-	var p, s int
+func fromTTL(t *testing.T, ttl string, addDays int) time.Time {
+	var value int
 	var unit string
-	fmt.Sscanf(pendingTTL, "%d %s", &p, &unit)
+	fmt.Sscanf(ttl, "%d %s", &value, &unit)
 
 	if unit != "days" {
-		t.Fatalf("%s: inexpected unit for pendingTTL. Got %s. Want days", failPrefix(t, 1), unit)
+		t.Fatalf("%s: unexpected unit. Got %s. Want days", failPrefix(t, 1), unit)
 	}
-	fmt.Sscanf(sessionTTL, "%d %s", &s, &unit)
-	if unit != "days" {
-		t.Fatalf("%s: unexpected unit for sessionTTL. Got %s. Want days", failPrefix(t, 1), unit)
-	}
+	tt := time.Now().AddDate(0, 0, -value+addDays)
+	return tt
 
-	pending = time.Now().AddDate(0, 0, -p+addDays)
-	sessions = time.Now().AddDate(0, 0, -s+addDays)
-	return
+}
+
+func getPendingTime(t *testing.T, addDays int) (pending time.Time) {
+	return fromTTL(t, pendingTTL, addDays)
+}
+
+func getSessionTime(t *testing.T, addDays int) (session time.Time) {
+	return fromTTL(t, sessionTTL, addDays)
+}
+
+func getEmailTime(t *testing.T, addDays int) (email time.Time) {
+	return fromTTL(t, emailTTL, addDays)
 }

@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -16,9 +15,9 @@ import (
 */
 
 type pendingItem struct {
-	ID    string         `json:"id"`
-	Email string         `json:"email"`
-	Data  map[string]any `json:"data"`
+	ID    string            `json:"id"`
+	Email string            `json:"email"`
+	Data  map[string]string `json:"data"`
 }
 
 type pending struct {
@@ -66,10 +65,10 @@ func TestDebugAPIGetPendingJoin(t *testing.T) {
 	name := "John Doe"
 	email := "johndoe@example.com"
 	password := "password1234"
-	extra := map[string]any{"url": "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"}
 	lang := "en"
+	extra := "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"
 
-	d := map[string]any{
+	d := map[string]string{
 		"name":     name,
 		"email":    email,
 		"password": password,
@@ -119,9 +118,8 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 	clearTables(t)
 
 	url := "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"
-	value := 42
 
-	var data = []map[string]any{{
+	var data = []map[string]string{{
 		"name":     "John Doe 1",
 		"email":    "johndoe@example.com",
 		"password": "password1",
@@ -129,17 +127,16 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 		"name":     "John Doe 2",
 		"email":    "johndoe@example.com",
 		"password": "password2",
-		"extra":    map[string]any{},
+		"lang":     "en",
+		"extra":    url,
 	}, {
 		"name":     "John Smith",
 		"email":    "johnsmith@example.com",
 		"password": "password3",
-		"extra":    map[string]string{"url": url},
 	}, {
 		"name":     "John Doe 3",
 		"email":    "johndoe@example.com",
 		"password": "password4",
-		"extra":    map[string]int{"value": value},
 	}}
 
 	for _, d := range data {
@@ -160,38 +157,42 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 	}
 
 	for i := range data {
-		email1 := data[i]["email"].(string)
-		name1 := data[i]["name"].(string)
-		password1 := data[i]["password"].(string)
+		email1, name1, password1, _, extra1 := data[i]["email"], data[i]["name"], data[i]["password"], data[i]["lang"], data[i]["extra"]
+		id2, email2, name2, hash2, extra2 := joins[i]["id"], joins[i]["email"], joins[i]["name"], joins[i]["password_hash"], joins[i]["extra"]
+		// email1 := data[i]["email"].(string)
+		// name1 := data[i]["name"].(string)
+		// password1 := data[i]["password"].(string)
 
-		x1 := data[i]["extra"]
-		var extra1 any
-		if x1 != nil {
-			extra1 = x1
-		} else {
-			extra1 = nil
-		}
+		// x1 := data[i]["extra"]
+		// var extra1 any
+		// if x1 != nil {
+		// 	extra1 = x1
+		// } else {
+		// 	extra1 = nil
+		// }
 
-		j := joins[i]
-		id2 := j["id"].(string)
-		email2 := j["email"].(string)
-		name2 := j["name"].(string)
-		hash2 := j["password_hash"].(string)
+		// j := joins[i]
+		// id2 := j["id"].(string)
+		// email2 := j["email"].(string)
+		// name2 := j["name"].(string)
+		// hash2 := j["password_hash"].(string)
 
 		k := got.Pending[i]
 		d := k.Data
 
-		id3 := k.ID
-		email3 := k.Email
-		name3 := d["name"].(string)
-		hash3 := d["password_hash"].(string)
-		var extra3 any
+		id3, email3, name3, hash3, extra3 := k.ID, k.Email, d["name"], d["password_hash"], d["extra"]
 
-		if x1 != nil {
-			extra3 = d["extra"]
-		} else {
-			extra3 = nil
-		}
+		// id3 := k.ID
+		// email3 := k.Email
+		// name3 := d["name"].(string)
+		// hash3 := d["password_hash"].(string)
+		// var extra3 any
+
+		// if x1 != nil {
+		// 	extra3 = d["extra"]
+		// } else {
+		// 	extra3 = nil
+		// }
 
 		if id2 != id3 {
 			t.Fatalf("#%d: Unexpected id in join data. Got %s. Want %s", i, id3, id2)
@@ -199,23 +200,27 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 		if email2 != email1 || email3 != email1 {
 			t.Fatalf("#%d: unexpected email in join data. Got %s. Want %s", i, email3, email1)
 		}
-
 		if name2 != name1 || name3 != name1 {
 			t.Fatalf("#%d: unexpected name in join data. Got %s. Want %s", i, name3, name1)
 		}
 		if hash2 != hash3 {
 			t.Fatalf("#%d: unexpected password hash in join data. Got %s. Want %s", i, hash3, hash2)
 		}
-
 		if bcrypt.CompareHashAndPassword([]byte(hash3), []byte(password1)) != nil {
 			t.Fatalf("#%d: unexpected password hash in join", i)
 		}
-
-		e1 := fmt.Sprintf("%v", extra1)
-		e3 := fmt.Sprintf("%v", extra3)
-
-		if e3 != e1 {
-			t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, e3, e1)
+		// if lang2 != lang1 || lang3 != lang1 {
+		// 	t.Fatalf("#%d: unexpected lang in join data. Got %s. Want %s", i, lang3, lang1)
+		// }
+		if extra2 != extra1 || extra3 != extra1 {
+			t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, extra3, extra1)
 		}
+
+		// e1 := fmt.Sprintf("%v", extra1)
+		// e3 := fmt.Sprintf("%v", extra3)
+
+		// if e3 != e1 {
+		// 	t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, e3, e1)
+		// }
 	}
 }

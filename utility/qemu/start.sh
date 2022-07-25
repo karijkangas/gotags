@@ -23,5 +23,5 @@ qemu-system-aarch64 \
   -device nvme,drive=drive0,serial=drive0,bootindex=0 \
   -drive if=none,media=disk,id=drive0,format=qcow2,file=$DISK_FILE \
   -net nic,model=virtio \
-  -net user,hostfwd=tcp::8022-:22,hostfwd=tcp::8000-:8000 \
+  -net user,hostfwd=tcp::8022-:22,hostfwd=tcp::8000-:8000,hostfwd=tcp::8345-:2345 \
   -nographic

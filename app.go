@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -19,20 +20,24 @@ import (
 )
 
 const (
+	// don't mess with these in production, keep backups todo
 	passwordHashCost = bcrypt.DefaultCost
 	cleanupDBTimeUTC = "04:00"
 	pendingTTL       = "1 days"
 	sessionTTL       = "30 days"
+	emailTTL         = "1 days"
+	maxBodySize      = 10240
 )
 
 var paths = map[string]string{
-	"joinCheck":     "/api/join/check",
+	// public api
+	"joinCheck":     "/api/join/check", // *
 	"join":          "/api/join",
 	"joinActivate":  "/api/join/activate",
 	"signin":        "/api/signin",
 	"resetPassword": "/api/reset-password",
 	"newPassword":   "/api/reset-password/new",
-	//
+	//private api
 	"auth":              "",
 	"auth_session":      "/api/auth/session",
 	"auth_account":      "/api/auth/account",
@@ -41,17 +46,21 @@ var paths = map[string]string{
 	"auth_data_tags":    "/api/auth/your-data/tags",
 	"auth_password":     "/api/auth/password",
 	"auth_tags":         "/api/auth/tags/:id",
-	//
+	// debug api
 	"debug_reset":   "/debug/reset",
 	"debug_pending": "/debug/pending",
 }
 
+type emailValidator func(pool *pgxpool.Pool, email string) bool
+
 // GoTags holds parts together
 type GoTags struct {
-	pool       *pgxpool.Pool
-	router     *gin.Engine
-	authorized *gin.RouterGroup
-	mailer     mailer
+	pool           *pgxpool.Pool
+	router         *gin.Engine
+	authorized     *gin.RouterGroup
+	emailer        mailer
+	emailValidator emailValidator
+	inputValidator *validator.Validate
 }
 
 // Session is set to gin context once Token validates
@@ -69,12 +78,18 @@ func (a *GoTags) auth() gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		// use the first value
+		// use the first value.
 		token := tokens[0]
+
+		// just in case; validate token before use for db query
+		err := a.inputValidator.Var(token, "required,uuid4")
+		if err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+		}
 
 		var user int
 		// var name, email string // excluding password_hash.
-		err := a.pool.QueryRow(
+		err = a.pool.QueryRow(
 			context.Background(),
 			`SELECT (user_id) FROM sessions WHERE id = $1;`,
 			token).Scan(&user)
@@ -83,8 +98,14 @@ func (a *GoTags) auth() gin.HandlerFunc {
 			return
 		}
 
-		// c.Set("user", user)
 		c.Set("session", Session{user, token})
+		c.Next()
+	}
+}
+
+func bodySizeLimiter(n int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, n)
 		c.Next()
 	}
 }
@@ -98,15 +119,19 @@ func currentSession(c *gin.Context) Session {
 	return s.(Session)
 }
 
-// hook
+// hooks
 var extraInitializations = []func(a *GoTags){}
 
 func addExtraInitialization(f func(a *GoTags)) {
 	extraInitializations = append(extraInitializations, f)
 }
 
+func furtherValidateEmail(pool *pgxpool.Pool, email string) bool {
+	return true // no anti-cycle-measures
+}
+
 /* initialize connects to database, sets up gin router and initializes (a *GoTags).
-It also activate hooks and the scheduler. CALLED from main. */
+It also activates hooks and the scheduler. CALLED from main. */
 func (a *GoTags) initialize(databaseURL string) {
 	pool, err := pgxpool.Connect(context.Background(), databaseURL)
 	if err != nil {
@@ -114,6 +139,8 @@ func (a *GoTags) initialize(databaseURL string) {
 	}
 
 	router := gin.Default()
+
+	router.Use(bodySizeLimiter(maxBodySize))
 
 	router.POST(paths["joinCheck"], a.joinCheck)
 	router.POST(paths["join"], a.join)
@@ -142,12 +169,16 @@ func (a *GoTags) initialize(databaseURL string) {
 	a.pool = pool
 	a.router = router
 	a.authorized = authorized
-	a.mailer = sasMailer
+	a.emailer = sasMailer
+	a.inputValidator = validator.New()
 
 	// hook run hooks
 	for _, f := range extraInitializations {
 		f(a)
 	}
+
+	// set default validator
+	a.emailValidator = furtherValidateEmail
 
 	// start scheduler; initially to run nightly database cleanup
 	s := gocron.NewScheduler(time.UTC)
@@ -159,26 +190,28 @@ func (a *GoTags) initialize(databaseURL string) {
 func (a *GoTags) cleanupDB() {
 	log.Println("Running database cleanup")
 
-	b := &pgx.Batch{}
+	b := &pgx.Batch{} // todo obv
 	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%s';`, pendingTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%s';`, sessionTTL))
-
-	// TODO: cleanup limiter
-
+	b.Queue(fmt.Sprintf(`DELETE FROM limiter WHERE created_at < now() - interval '%s';`, emailTTL))
 	r := a.pool.SendBatch(context.Background(), b)
 	defer r.Close()
 
 	_, err := r.Exec()
 	if err != nil {
-		log.Println("Error in database cleanup:", err)
+		log.Println("Error in database cleanup (pending)", err)
 	}
 	_, err = r.Exec()
 	if err != nil {
-		log.Println("Error in database cleanup:", err)
+		log.Println("Error in database cleanup (sessions):", err)
+	}
+	_, err = r.Exec()
+	if err != nil {
+		log.Println("Error in database cleanup (limiter):", err)
 	}
 }
 
-// called from main, runs the server in a loop.
+// called from main, runs the server in a loop
 func (a *GoTags) run(server string) {
 	a.router.Run(server)
 }
@@ -232,9 +265,12 @@ func (t byConnected) Swap(i, j int) {
 	t[i], t[j] = t[j], t[i]
 }
 func (t byConnected) Less(i, j int) bool {
-	ti := t[i].Connected
-	tj := t[j].Connected
-	return ti < tj
+	ti := t[i]
+	tj := t[j]
+	if ti.Connected == tj.Connected {
+		return ti.Name < tj.Name
+	}
+	return ti.Connected < tj.Connected
 }
 
 func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
@@ -246,29 +282,30 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 		user)
 	defer rows.Close()
 
-	tagmap := map[string]tagrow{}
+	tagmap := map[string]*tagrow{}
 	for rows.Next() {
-		var id, name, category, modified, event, eventAt string
-		err = rows.Scan(&id, &name, &category, &modified, &event, &eventAt)
+		var id, name, category, event string
+		var modifiedAt, eventAt time.Time
+		err = rows.Scan(&id, &name, &category, &modifiedAt, &event, &eventAt)
 		if err == nil {
 			if _, ok := tagmap[id]; !ok {
-				tagmap[id] = tagrow{}
+				tagmap[id] = &tagrow{}
 			}
 			t := tagmap[id]
 			t.ID = id
 			t.Name = name
-			t.Modified = modified
+			t.Modified = modifiedAt.String()
 			t.Category = category
 
 			switch event {
 			case "connected":
-				t.Connected = eventAt
+				t.Connected = eventAt.String()
 			case "accessed":
-				t.Accessed = eventAt
+				t.Accessed = eventAt.String()
 			case "acted_on":
-				t.ActedOn = eventAt
+				t.ActedOn = eventAt.String()
 			default:
-				log.Fatal("unexpected tag event", event)
+				log.Fatalln("unexpected tag event", event)
 			}
 		} else {
 			return nil, err
@@ -281,10 +318,10 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 
 	tagrows := make([]tagrow, 0, len(tagmap))
 	for k := range tagmap {
-		tagrows = append(tagrows, tagmap[k])
+		tagrows = append(tagrows, *tagmap[k])
 	}
 
-	// sort first connected tag first
+	// sort by connected timestamp and by tag name
 	sort.Sort(byConnected(tagrows))
 
 	return tagrows, nil
@@ -313,13 +350,19 @@ func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
 // paths
 func (a *GoTags) joinCheck(c *gin.Context) {
 	var d struct {
-		Email string `json:"email" binding:"required,email"`
+		Email string `json:"email" binding:"required,email,max=1024"`
+		// these validators can be customised
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	email := d.Email
+
+	if !a.emailValidator(a.pool, email) { // further validate email
+		c.Status(http.StatusConflict)
+		return
+	}
 
 	// check if email is in use
 	exists, err := queryEmailExists(a.pool, email)
@@ -338,11 +381,11 @@ func (a *GoTags) joinCheck(c *gin.Context) {
 //
 func (a *GoTags) join(c *gin.Context) {
 	var d struct {
-		Name     string `json:"name" binding:"required,min=1"`
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
-		Lang     string `json:"lang"`
-		Extra    any    `json:"extra"`
+		Name     string `json:"name" binding:"required,min=1,max=1024"`
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
+		Lang     string `json:"lang" binding:"max=1024"`
+		Extra    string `json:"extra" binding:"max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -351,8 +394,13 @@ func (a *GoTags) join(c *gin.Context) {
 	name := d.Name
 	email := d.Email
 	password := d.Password
-	extra := d.Extra
 	lang := d.Lang
+	extra := d.Extra
+
+	if !a.emailValidator(a.pool, email) { // further validate email
+		c.Status(http.StatusConflict)
+		return
+	}
 
 	// begin transaction
 	tx, err := a.pool.Begin(context.Background())
@@ -421,7 +469,7 @@ func (a *GoTags) join(c *gin.Context) {
 	case err != nil:
 		switch e := err.(type) {
 		case *pgconn.PgError:
-			if e.Code == "P0001" && e.Message == "pending: no capacity" {
+			if e.Code == "P0001" /* && e.Message == "pending: no capacity" */ {
 				c.Status(http.StatusTooManyRequests)
 				return
 			}
@@ -442,7 +490,7 @@ func (a *GoTags) join(c *gin.Context) {
 	req.URL.RawQuery = q.Encode()
 
 	// send message with a link
-	err = a.mailer(email, req.URL.String(), lang)
+	err = a.emailer(email, req.URL.String(), lang)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -461,15 +509,16 @@ func (a *GoTags) join(c *gin.Context) {
 //
 func (a *GoTags) joinActivate(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,uuid"`
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
+		ID       string `json:"id" binding:"required,uuid4"`
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	id := d.ID
+	email := d.Email
 	password := d.Password
 
 	// begin transaction
@@ -481,13 +530,13 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	defer tx.Rollback(context.Background())
 
 	// delete matching pending join, get email and data
-	var email string
+	var pendingEmail string
 	data := map[string]any{}
 	row := tx.QueryRow(
 		context.Background(),
 		`DELETE FROM pending WHERE id = $1 AND category = 'join' RETURNING email, data;`,
 		id)
-	err = row.Scan(&email, &data)
+	err = row.Scan(&pendingEmail, &data)
 	switch {
 	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
@@ -501,7 +550,7 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	name := (data["name"]).(string)
 	passwordHash := (data["password_hash"]).(string)
 	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
-	if email != d.Email || err != nil {
+	if pendingEmail != email || err != nil {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -520,7 +569,7 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	err = row.Scan(&user)
 	switch {
 	case err == pgx.ErrNoRows:
-		// should not happen
+		log.Print("unexpected error err == pgx.ErrNoRows", err) // should not happen
 		c.Status(http.StatusInternalServerError)
 		return
 	case err != nil:
@@ -579,8 +628,8 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 //
 func (a *GoTags) signin(c *gin.Context) {
 	var d struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -679,8 +728,8 @@ func (a *GoTags) signin(c *gin.Context) {
 //
 func (a *GoTags) resetPassword(c *gin.Context) {
 	var d struct {
-		Email string `json:"email" binding:"required,email"`
-		Lang  string `json:"lang"`
+		Email string `json:"email" binding:"required,email,max=1024"`
+		Lang  string `json:"lang" binding:"max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -759,14 +808,6 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 			return
 		}
 	}
-	// switch {
-	// case err == pgx.ErrNoRows:
-	// 	c.Status(http.StatusTooManyRequests)
-	// 	return
-	// case err != nil:
-	// 	c.Status(http.StatusInternalServerError)
-	// 	return
-	// }
 
 	// create reset password url
 	req, err := http.NewRequest("GET", paths["resetPasswordVerify"], nil)
@@ -780,7 +821,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	req.URL.RawQuery = q.Encode()
 
 	// send message with a link to complete password reset
-	err = a.mailer(email, req.URL.String(), lang)
+	err = a.emailer(email, req.URL.String(), lang)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -799,15 +840,16 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 //
 func (a *GoTags) newPassword(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,uuid"`
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
+		ID       string `json:"id" binding:"required,uuid4"`
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	id := d.ID
+	email := d.Email
 	password := d.Password
 
 	// start transaction
@@ -819,12 +861,12 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	defer tx.Rollback(context.Background())
 
 	// delete matching pending password reset, get email
-	var email string
+	var pendingEmail string
 	row := tx.QueryRow(
 		context.Background(),
 		`DELETE FROM pending WHERE id = $1 AND category = 'reset_password' RETURNING email;`,
 		id)
-	err = row.Scan(&email)
+	err = row.Scan(&pendingEmail)
 	switch {
 	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
@@ -834,7 +876,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		return
 	}
 
-	if email != d.Email {
+	if pendingEmail != email {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -877,7 +919,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 	case err != nil:
 		switch e := err.(type) {
 		case *pgconn.PgError:
-			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+			if e.Code == "P0001" /* && e.Message == "sessions: no capacity" */ {
 				c.Status(http.StatusTooManyRequests)
 				return
 			}
@@ -911,6 +953,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		"token": token})
 }
 
+// ******************************************************************
 //
 func (a *GoTags) renewSession(c *gin.Context) {
 	session := currentSession(c)
@@ -977,7 +1020,7 @@ func (a *GoTags) updateAccount(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Name string `json:"name" binding:"required,min=1"`
+		Name string `json:"name" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1010,8 +1053,8 @@ func (a *GoTags) deleteAccount(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=1"`
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1109,8 +1152,8 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Profile    map[string]any `json:"profile" binding:"required"`
-		ModifiedAt string         `json:"modified_at" binding:"required,datetime=2006-01-02T15:04:05Z07:00"`
+		Profile    map[string]any `json:"profile" binding:"required,max=1024"`
+		ModifiedAt string         `json:"modified_at" binding:"required,max=1024,datetime=2006-01-02T15:04:05Z07:00"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1160,7 +1203,7 @@ func (a *GoTags) connectTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid4"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1180,24 +1223,28 @@ func (a *GoTags) connectTags(c *gin.Context) {
 	b := &pgx.Batch{}
 
 	for _, t := range tags {
-		b.Queue(`INSERT INTO tag_event (user_id, tag_id, category, event_at)
+		b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
 				 VALUES ($1, $2, 'connected', current_timestamp)
-				 ON CONFLICT (user_id, tag_id, category, event_at) DO UPDATE
-				 SET event_at=EXCLUDED.event_at;`, user, t)
+				 ON CONFLICT (user_id, tag_id, category) DO NOTHING;`, user, t)
 	}
 
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
 	for range tags {
-		t, err := r.Exec()
+		_, err := r.Exec()
 		switch {
-		case t.RowsAffected() == 0:
-			c.Status(http.StatusNotFound)
-			return
 		case err != nil:
-			c.Status(http.StatusInternalServerError)
-			return
+			switch e := err.(type) {
+			case *pgconn.PgError:
+				if e.Code == "23503" { // foreign_key_violation
+					c.Status(http.StatusNotFound)
+					return
+				}
+			default:
+				c.Status(http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 	r.Close()
@@ -1223,7 +1270,7 @@ func (a *GoTags) disconnectTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid4"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1242,14 +1289,11 @@ func (a *GoTags) disconnectTags(c *gin.Context) {
 
 	_, err = tx.Exec(
 		context.Background(),
-		`DELETE FROM tag_events WHERE user_id = $1 AND tag_id IN $2`, user, tags)
+		`DELETE FROM tag_events WHERE user_id = $1 AND tag_id=ANY($2)`, user, tags)
 	switch {
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
 		return
-		// case t.RowsAffected() == 0:
-		// 	c.Status(http.StatusGone)
-		// 	return
 	}
 
 	data, err := a.queryUserDataTx(tx, session.User)
@@ -1273,8 +1317,8 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Password    string `json:"password" binding:"required,min=1"`
-		NewPassword string `json:"newPassword" binding:"required,min=1"`
+		Password    string `json:"password" binding:"required,min=1,max=1024"`
+		NewPassword string `json:"newPassword" binding:"required,min=1,max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1345,7 +1389,7 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 }
 
 type tagPath struct {
-	ID string `uri:"id" binding:"required,uuid"`
+	ID string `uri:"id" binding:"required,uuid4"`
 }
 
 //
@@ -1431,6 +1475,7 @@ func nopHandler(currentData, updateData map[string]any) map[string]any {
 
 var tagHandlers = map[string]tagFunc{
 	"nop": nopHandler,
+	// todo
 	// "counter": nil,
 	// "anti-counter": nil,
 }

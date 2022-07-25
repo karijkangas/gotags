@@ -2,11 +2,11 @@ swagger: "2.0"
 info:
   contact:
     name: Kari Kangas (karijkangas@gmail.com)
-  description: "Data consists of 3 parts: (name, email) account data, user data, and token. With extra, join may carry the original link over email."
+  description: "Data consists of 3 parts: (name, email) account data, user data, and token. With extra, join carries the original link over email. Maximum body size 10240 bytes."
   license:
     name: MIT
   title: Gotagsavaruus REST API
-  version: 0.0.2
+  version: 0.1.0
 host: 127.0.0.1:8000
 servers:
   - url: http://127.0.0.1:8000
@@ -35,7 +35,7 @@ paths:
       description: |
         Check account availability. 
 
-        An account is available if email is not used by an existing user.
+        An account is available if the email is not used by an existing user.
       parameters:
         - description: Input data
           in: body
@@ -53,7 +53,7 @@ paths:
         "400":
           description: Invalid data
         "409":
-          description: Account not available
+          description: Conflict; account not available
       tags:
         - public
   /join:
@@ -67,7 +67,7 @@ paths:
 
         The number of pending requests is limited per email address.
 
-        The number of requests in total within a time period is limited per email address.
+        The number of requests in total within a time frame is limited per email address.
       parameters:
         - description: Input data
           in: body
@@ -213,7 +213,7 @@ paths:
         "401":
           description: Emails do not match
         "404":
-          description: Password reset equest not found
+          description: Password reset request not found
         "410":
           description: User with email not found
         "429":
@@ -223,7 +223,7 @@ paths:
   /auth/session:
     patch:
       description: |
-        Ping, renew a session.
+        Renew a session: ping.
       security:
         - ApiKeyAuth: []
       produces:
@@ -241,7 +241,7 @@ paths:
       description: |
         Delete session: sign out.
 
-        Token goes void, session data removed.
+        Session data removed, token becomes void.
       security:
         - ApiKeyAuth: []
       produces:
@@ -356,7 +356,7 @@ paths:
       description: |
         Set user profile.
 
-        modified_at enables blocking out-of-sync updates from multiple browser instances.
+        modified_at prevents out-of-sync updates from multiple browser instances.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -416,6 +416,8 @@ paths:
     delete:
       description: |
         Disconnect tags from user.
+
+        Unknown tags are ignored.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -475,12 +477,12 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
-        - in: path
-          name: id
+        - name: id
+          in: path
+          description: Tag ID
           required: true
           schema:
             type: string
-          description: Tag ID
       produces:
         - application/json
       responses:
@@ -500,6 +502,12 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
+        - name: id
+          in: path
+          description: Tag ID
+          required: true
+          schema:
+            type: string
         - description: Input data
           in: body
           name: data
@@ -582,9 +590,7 @@ definitions:
       lang:
         type: string
       extra:
-        oneOf:
-          - type: string
-          - type: object
+        type: string
     required:
       - name
       - email
@@ -611,10 +617,45 @@ definitions:
         type: string
       data:
         type: object
+        properties:
+          profile:
+            type: object
+          tags:
+            type: array
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  category:
+                    type: string
+                  modified:
+                    type: string
+                  connected:
+                    type: string
+                  accessed:
+                    type: string
+                  acted_on:
+                    type: string
+                required:
+                  - id
+                  - name
+                  - category
+                  - modified
+                  - connected
+                  - accessed
+                  - acted_on
+        required:
+          - profile
+          - tags
       token:
         type: string
       extra:
-        type: object
+        type: string
     required:
       - name
       - email
@@ -639,6 +680,41 @@ definitions:
         type: string
       data:
         type: object
+        properties:
+          profile:
+            type: object
+          tags:
+            type: array
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  category:
+                    type: string
+                  modified:
+                    type: string
+                  connected:
+                    type: string
+                  accessed:
+                    type: string
+                  acted_on:
+                    type: string
+                required:
+                  - id
+                  - name
+                  - category
+                  - modified
+                  - connected
+                  - accessed
+                  - acted_on
+        required:
+          - profile
+          - tags
       token:
         type: string
   INResetPassword:
@@ -672,6 +748,41 @@ definitions:
         type: string
       data:
         type: object
+        properties:
+          profile:
+            type: object
+          tags:
+            type: array
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  category:
+                    type: string
+                  modified:
+                    type: string
+                  connected:
+                    type: string
+                  accessed:
+                    type: string
+                  acted_on:
+                    type: string
+                required:
+                  - id
+                  - name
+                  - category
+                  - modified
+                  - connected
+                  - accessed
+                  - acted_on
+        required:
+          - profile
+          - tags
       token:
         type: string
   INAccount:
