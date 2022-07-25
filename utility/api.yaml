@@ -225,7 +225,7 @@ paths:
   /auth/session:
     patch:
       description: |
-        Renew a session: ping.
+        Renew a session.
       security:
         - ApiKeyAuth: []
       produces:
@@ -241,7 +241,7 @@ paths:
         - authorized
     delete:
       description: |
-        Delete session: sign out.
+        Delete session.
 
         Session data removed, token becomes void.
       security:
@@ -253,6 +253,34 @@ paths:
           description: Session deleted, token void.
         "401":
           description: Invalid token
+        "410":
+          description: Failed, user gone?
+      tags:
+        - authorized
+  /auth/password:
+    post:
+      description: |
+        Update password.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INPassword"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Password changed
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "409":
+          description: Incorrect password
         "410":
           description: Failed, user gone?
       tags:
@@ -358,7 +386,11 @@ paths:
       description: |
         Set user profile.
 
-        modified_at prevents out-of-sync updates from multiple browser instances.
+        Profile is a backend storage for per-account UI data.
+
+        Use the latest profile modified_at value.
+
+        Timestamp mechanism blocks out-of-sync updates from multiple sources.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -444,34 +476,6 @@ paths:
           description: Failed, user gone?
       tags:
         - authorized
-  /auth/password:
-    post:
-      description: |
-        Update password.
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - description: Input data
-          in: body
-          name: data
-          required: true
-          schema:
-            $ref: "#/definitions/INPassword"
-      produces:
-        - application/json
-      responses:
-        "200":
-          description: Password changed
-        "400":
-          description: Invalid data
-        "401":
-          description: Invalid token
-        "409":
-          description: Incorrect password
-        "410":
-          description: Failed, user gone?
-      tags:
-        - authorized
   /auth/tags/{id}:
     get:
       description: |
@@ -498,9 +502,11 @@ paths:
           description: Tag not found
       tags:
         - authorized
-    put:
+    post:
       description: |
         Update tag data.
+
+        Tag category handlers process input to output.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -622,6 +628,11 @@ definitions:
         properties:
           profile:
             type: object
+            properties:
+              data:
+                type: object
+              modified_at:
+                type: string
           tags:
             type: array
             items:
@@ -685,6 +696,11 @@ definitions:
         properties:
           profile:
             type: object
+            properties:
+              data:
+                type: object
+              modified_at:
+                type: string
           tags:
             type: array
             items:
@@ -753,6 +769,11 @@ definitions:
         properties:
           profile:
             type: object
+            properties:
+              data:
+                type: object
+              modified_at:
+                type: string
           tags:
             type: array
             items:
@@ -810,7 +831,7 @@ definitions:
   INProfile:
     type: object
     properties:
-      profile:
+      data:
         type: object
       modified_at:
         type: string
@@ -831,6 +852,11 @@ definitions:
     properties:
       profile:
         type: object
+        properties:
+          data:
+            type: object
+          modified_at:
+            type: string
       tags:
         type: array
         items:

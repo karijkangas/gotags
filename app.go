@@ -163,7 +163,7 @@ func (a *GoTags) initialize(databaseURL string) {
 		authorized.DELETE(paths["auth_data_tags"], a.disconnectTags)
 		authorized.POST(paths["auth_password"], a.updatePassword)
 		authorized.GET(paths["auth_tags"], a.getTag)
-		authorized.PUT(paths["auth_tags"], a.updateTag)
+		authorized.POST(paths["auth_tags"], a.updateTag)
 	}
 
 	a.pool = pool
@@ -1149,16 +1149,18 @@ func (a *GoTags) getData(c *gin.Context) {
 
 //
 func (a *GoTags) updateProfile(c *gin.Context) {
-	session := currentSession(c)
+	user := currentSession(c).User
 
 	var d struct {
-		Profile    map[string]any `json:"profile" binding:"required,max=1024"`
+		Data       map[string]any `json:"data" binding:"required,max=1024"`
 		ModifiedAt string         `json:"modified_at" binding:"required,max=1024,datetime=2006-01-02T15:04:05Z07:00"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
+	data := d.Data
+	modifiedAt := d.ModifiedAt
 
 	// start transaction
 	tx, err := a.pool.Begin(context.Background())
@@ -1172,7 +1174,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 		context.Background(),
 		`UPDATE profiles SET data = $1
 			WHERE id = $2 AND modified_at = $3;`,
-		d.Profile, session.User, d.ModifiedAt)
+		data, user, modifiedAt)
 	switch {
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
@@ -1182,7 +1184,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 		return
 	}
 
-	data, err := a.queryUserDataTx(tx, session.User)
+	userData, err := a.queryUserDataTx(tx, user)
 	if err != nil {
 		c.Status(http.StatusGone)
 		return
@@ -1195,7 +1197,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, data)
+	c.JSON(http.StatusOK, userData)
 }
 
 //

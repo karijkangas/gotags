@@ -1247,7 +1247,7 @@ func TestDeleteAccountFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid session
-	response = doPut(t, paths["auth_account"], []byte(marshallAny(t, d)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
+	response = doDelete(t, paths["auth_account"], []byte(marshallAny(t, d)), "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// Test no password
@@ -1382,7 +1382,7 @@ func TestUpdateProfile(t *testing.T) {
 
 	// update profile
 	d1 := map[string]any{
-		"profile":     profile.Data,
+		"data":        profile.Data,
 		"modified_at": ud.Profile.ModifiedAt,
 	}
 	response = doPost(t, paths["auth_data_profile"], []byte(marshallAny(t, d1)), session)
@@ -1412,7 +1412,7 @@ func TestUpdateProfileFails(t *testing.T) {
 	session := addSession(t, user)
 
 	d1 := map[string]any{
-		"profile":     profile.Data,
+		"data":        profile.Data,
 		"modified_at": time.Now().AddDate(0, 0, -1),
 	}
 	// no session
@@ -1446,13 +1446,13 @@ func TestUpdateProfileBadData(t *testing.T) {
 		{`{`, 400},
 		{`{}`, 400},           // no data
 		{`{"foo": 123}`, 400}, // no data
-		{`{"profile": "", "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400},                                         // invalid profile
-		{`{"profile": 123, "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400},                                        // invalid profile
-		{`{"profile": {}, "modified_at": 123}`, 400},                                                                 // invalid modified_at
-		{`{"profile": {}, "modified_at": ""}`, 400},                                                                  // invalid modified_at
-		{`{"profile": {}, "modified_at": "2006-01-02T15:04"}`, 400},                                                  // invalid modified_at
-		{fmt.Sprintf(`{"profile": {"data": "%s"}, "modified_at": "2006-01-02T15:04:05Z07:00"}`, longString(1)), 400}, // too long profile data
-		{fmt.Sprintf(`{"profile": {}, "modified_at": "%s"}`, longString(1)), 400},                                    // too long modified_at
+		{`{"data": "", "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400},                                         // invalid profile
+		{`{"data": 123, "modified_at": "2006-01-02T15:04:05Z07:00"}`, 400},                                        // invalid profile
+		{`{"data": {}, "modified_at": 123}`, 400},                                                                 // invalid modified_at
+		{`{"data": {}, "modified_at": ""}`, 400},                                                                  // invalid modified_at
+		{`{"data": {}, "modified_at": "2006-01-02T15:04"}`, 400},                                                  // invalid modified_at
+		{fmt.Sprintf(`{"data": {"data": "%s"}, "modified_at": "2006-01-02T15:04:05Z07:00"}`, longString(1)), 400}, // too long profile data
+		{fmt.Sprintf(`{"data": {}, "modified_at": "%s"}`, longString(1)), 400},                                    // too long modified_at
 	}
 
 	for _, d := range data {
@@ -2005,7 +2005,7 @@ func TestUpdateTag(t *testing.T) {
 	tag := addTag(t, "tag1", "nop", d1.Data)
 
 	p := pathWithParam(paths["auth_tags"], ":id", tag)
-	response := doPut(t, p, []byte(marshallAny(t, d1)), session)
+	response := doPost(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusOK)
 
 	var jd tagDataOut
@@ -2037,12 +2037,12 @@ func TestUpdateTagFails(t *testing.T) {
 
 	// invalid session
 	p := pathWithParam(paths["auth_tags"], ":id", tag)
-	response := doPut(t, p, []byte(marshallAny(t, d1)), "")
+	response := doPost(t, p, []byte(marshallAny(t, d1)), "")
 	checkResponseCode(t, response, http.StatusUnauthorized)
 
 	// invalid tag
 	p = pathWithParam(paths["auth_tags"], ":id", "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
-	response = doPut(t, p, []byte(marshallAny(t, d1)), session)
+	response = doPost(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusNotFound)
 }
 
@@ -2062,12 +2062,12 @@ func TestUpdateTagBadData(t *testing.T) {
 
 	// bad tag id
 	p := pathWithParam(paths["auth_tags"], ":id", "hello")
-	response := doPut(t, p, []byte(marshallAny(t, d1)), session)
+	response := doPost(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusBadRequest)
 
 	// bad tag id
 	p = pathWithParam(paths["auth_tags"], ":id", "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
-	response = doPut(t, p, []byte(marshallAny(t, d1)), session)
+	response = doPost(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusBadRequest)
 
 	var data = [...]struct {
@@ -2087,7 +2087,7 @@ func TestUpdateTagBadData(t *testing.T) {
 	p = pathWithParam(paths["auth_tags"], ":id", "bf72f74b-6dbc-4d94-9b99-26413b3085e9")
 	for _, d := range data {
 		fmt.Println(d.data)
-		response := doPut(t, p, []byte(d.data), session)
+		response := doPost(t, p, []byte(d.data), session)
 		checkResponseCode(t, response, d.code)
 		checkResponseBody(t, response, "")
 	}
@@ -2110,7 +2110,7 @@ func TestUpdateTagTooBigData(t *testing.T) {
 		"data": longString(maxBodySize),
 	}}
 	p := pathWithParam(paths["auth_tags"], ":id", tag)
-	response := doPut(t, p, []byte(marshallAny(t, d1)), session)
+	response := doPost(t, p, []byte(marshallAny(t, d1)), session)
 	checkResponseCode(t, response, http.StatusBadRequest)
 }
 
@@ -2265,7 +2265,7 @@ func TestTagActedOn(t *testing.T) {
 		"value": 42,
 	}}
 	p := pathWithParam(paths["auth_tags"], ":id", tag1)
-	response = doPut(t, p, []byte(marshallAny(t, d2)), session1)
+	response = doPost(t, p, []byte(marshallAny(t, d2)), session1)
 	checkResponseCode(t, response, http.StatusOK)
 
 	// get user 1 data and check acted on
@@ -2284,11 +2284,11 @@ func TestTagActedOn(t *testing.T) {
 
 	// user1 acts on tag1 and tag2
 	p = pathWithParam(paths["auth_tags"], ":id", tag1)
-	response = doPut(t, p, []byte(marshallAny(t, d2)), session1)
+	response = doPost(t, p, []byte(marshallAny(t, d2)), session1)
 	checkResponseCode(t, response, http.StatusOK)
 
 	p = pathWithParam(paths["auth_tags"], ":id", tag2)
-	response = doPut(t, p, []byte(marshallAny(t, d2)), session1)
+	response = doPost(t, p, []byte(marshallAny(t, d2)), session1)
 	checkResponseCode(t, response, http.StatusOK)
 
 	// get user 1 data and check acted on
