@@ -83,7 +83,7 @@ func (a *GoTags) auth() gin.HandlerFunc {
 		token := tokens[0]
 
 		// just in case; validate token before use for db query
-		err := a.inputValidator.Var(token, "required,uuid4")
+		err := a.inputValidator.Var(token, "required,uuid")
 		if err != nil {
 			c.AbortWithStatus(http.StatusUnauthorized)
 		}
@@ -217,6 +217,22 @@ func (a *GoTags) run(server string) {
 	a.router.Run(server)
 }
 
+// type utcTime struct {
+//     time.Time
+// }
+
+// func (tt *utcTime) Scan(src interface{}) error {
+//     if t, ok := src.(time.Time); ok {
+//         tt.Time = t.In(time.UTC)
+//         return nil
+//     }
+//     return fmt.Errorf("utcTime: unsupported type %T", src)
+// }
+
+func jstime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
 // ******************************************************************
 func queryEmailExists(pool *pgxpool.Pool, email string) (bool, error) {
 	var exists bool
@@ -238,13 +254,13 @@ func queryEmailExistsTx(tx pgx.Tx, email string) (bool, error) {
 	return exists, err
 }
 
-func queryProfileDataTx(tx pgx.Tx, user int) (data map[string]any, modifiedAt time.Time, err error) {
+func queryProfileDataTx(tx pgx.Tx, user int) (data map[string]any, timestamp time.Time, err error) {
 	row := tx.QueryRow(
 		context.Background(),
 		`SELECT data, modified_at FROM profiles WHERE id = $1;`,
 		user)
-	err = row.Scan(&data, &modifiedAt)
-	return data, modifiedAt, err
+	err = row.Scan(&data, &timestamp)
+	return data, timestamp, err
 }
 
 type tagrow struct {
@@ -295,16 +311,16 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 			t := tagmap[id]
 			t.ID = id
 			t.Name = name
-			t.Modified = modifiedAt.String()
+			t.Modified = jstime(modifiedAt)
 			t.Category = category
 
 			switch event {
 			case "connected":
-				t.Connected = eventAt.String()
+				t.Connected = jstime(eventAt)
 			case "accessed":
-				t.Accessed = eventAt.String()
+				t.Accessed = jstime(eventAt)
 			case "acted_on":
-				t.ActedOn = eventAt.String()
+				t.ActedOn = jstime(eventAt)
 			default:
 				log.Fatalln("unexpected tag event", event)
 			}
@@ -329,7 +345,7 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 }
 
 func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
-	profileData, m, err := queryProfileDataTx(tx, user)
+	profileData, timestamp, err := queryProfileDataTx(tx, user)
 	if err != nil {
 		return nil, err
 	}
@@ -340,8 +356,8 @@ func (a *GoTags) queryUserDataTx(tx pgx.Tx, user int) (map[string]any, error) {
 
 	return map[string]any{
 		"profile": map[string]any{
-			"data":        profileData,
-			"modified_at": m,
+			"data":      profileData,
+			"timestamp": timestamp,
 		},
 		"tags": tags,
 	}, nil
@@ -428,11 +444,6 @@ func (a *GoTags) join(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	data := map[string]any{
-		"name":          name,
-		"password_hash": string(passwordHash),
-		"extra":         extra,
-	}
 
 	// add email to limiter
 	t, err := tx.Exec(
@@ -453,6 +464,13 @@ func (a *GoTags) join(c *gin.Context) {
 	case t.RowsAffected() == 0:
 		c.Status(http.StatusTooManyRequests)
 		return
+	}
+
+	// add pending join request data
+	data := map[string]any{
+		"name":          name,
+		"password_hash": string(passwordHash),
+		"extra":         extra,
 	}
 
 	var uuid string
@@ -510,7 +528,7 @@ func (a *GoTags) join(c *gin.Context) {
 //
 func (a *GoTags) joinActivate(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,uuid4"`
+		ID       string `json:"id" binding:"required,uuid"`
 		Email    string `json:"email" binding:"required,email,max=1024"`
 		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
@@ -731,6 +749,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	var d struct {
 		Email string `json:"email" binding:"required,email,max=1024"`
 		Lang  string `json:"lang" binding:"max=1024"`
+		Extra string `json:"extra" binding:"max=1024"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -738,6 +757,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	}
 	email := d.Email
 	lang := d.Lang
+	extra := d.Extra
 
 	// beging transaction
 	tx, err := a.pool.Begin(context.Background())
@@ -785,13 +805,17 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	}
 
 	// add pending reset password data
+	data := map[string]any{
+		"extra": extra,
+	}
+
 	var uuid string
 	row = tx.QueryRow(
 		context.Background(),
-		`INSERT INTO pending (email, category)
-			VALUES ($1, 'reset_password')
+		`INSERT INTO pending (email, category, data)
+			VALUES ($1, 'reset_password', $2)
 			RETURNING id;`,
-		email)
+		email, data)
 	err = row.Scan(&uuid)
 	switch {
 	case err == pgx.ErrNoRows:
@@ -800,7 +824,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 	case err != nil:
 		switch e := err.(type) {
 		case *pgconn.PgError:
-			if e.Code == "P0001" && e.Message == "pending: no capacity" {
+			if e.Code == "P0001" /* && e.Message == "pending: no capacity" */ {
 				c.Status(http.StatusTooManyRequests)
 				return
 			}
@@ -841,7 +865,7 @@ func (a *GoTags) resetPassword(c *gin.Context) {
 //
 func (a *GoTags) newPassword(c *gin.Context) {
 	var d struct {
-		ID       string `json:"id" binding:"required,uuid4"`
+		ID       string `json:"id" binding:"required,uuid"`
 		Email    string `json:"email" binding:"required,email,max=1024"`
 		Password string `json:"password" binding:"required,min=1,max=1024"`
 	}
@@ -863,11 +887,12 @@ func (a *GoTags) newPassword(c *gin.Context) {
 
 	// delete matching pending password reset, get email
 	var pendingEmail string
+	data := map[string]any{}
 	row := tx.QueryRow(
 		context.Background(),
-		`DELETE FROM pending WHERE id = $1 AND category = 'reset_password' RETURNING email;`,
+		`DELETE FROM pending WHERE id = $1 AND category = 'reset_password' RETURNING email, data;`,
 		id)
-	err = row.Scan(&pendingEmail)
+	err = row.Scan(&pendingEmail, &data)
 	switch {
 	case err == pgx.ErrNoRows:
 		c.Status(http.StatusNotFound)
@@ -881,6 +906,7 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
+	extra := data["extra"]
 
 	// generate password hash
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
@@ -951,7 +977,9 @@ func (a *GoTags) newPassword(c *gin.Context) {
 		"name":  name,
 		"email": email,
 		"data":  userData,
-		"token": token})
+		"token": token,
+		"extra": extra,
+	})
 }
 
 // ******************************************************************
@@ -1153,15 +1181,15 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 	user := currentSession(c).User
 
 	var d struct {
-		Data       map[string]any `json:"data" binding:"required,max=1024"`
-		ModifiedAt string         `json:"modified_at" binding:"required,max=1024,datetime=2006-01-02T15:04:05Z07:00"`
+		Data      map[string]any `json:"data" binding:"required,max=1024"`
+		Timestamp string         `json:"timestamp" binding:"required,max=1024,datetime=2006-01-02T15:04:05Z07:00"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	data := d.Data
-	modifiedAt := d.ModifiedAt
+	timestamp := d.Timestamp
 
 	// start transaction
 	tx, err := a.pool.Begin(context.Background())
@@ -1175,7 +1203,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 		context.Background(),
 		`UPDATE profiles SET data = $1
 			WHERE id = $2 AND modified_at = $3;`,
-		data, user, modifiedAt)
+		data, user, timestamp)
 	switch {
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
@@ -1206,7 +1234,7 @@ func (a *GoTags) connectTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Tags []string `json:"tags" binding:"gt=0,dive,uuid4"`
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1227,7 +1255,7 @@ func (a *GoTags) connectTags(c *gin.Context) {
 
 	for _, t := range tags {
 		b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-				 VALUES ($1, $2, 'connected', current_timestamp)
+				 VALUES ($1, $2, 'connected', now_utc())
 				 ON CONFLICT (user_id, tag_id, category) DO NOTHING;`, user, t)
 	}
 
@@ -1273,7 +1301,7 @@ func (a *GoTags) disconnectTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
-		Tags []string `json:"tags" binding:"gt=0,dive,uuid4"`
+		Tags []string `json:"tags" binding:"gt=0,dive,uuid"`
 	}
 	if err := c.BindJSON(&d); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -1392,7 +1420,7 @@ func (a *GoTags) updatePassword(c *gin.Context) {
 }
 
 type tagPath struct {
-	ID string `uri:"id" binding:"required,uuid4"`
+	ID string `uri:"id" binding:"required,uuid"`
 }
 
 //
@@ -1425,7 +1453,7 @@ func (a *GoTags) getTag(c *gin.Context) {
 
 	// 2
 	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-	         VALUES ($1, $2, 'accessed', current_timestamp)
+	         VALUES ($1, $2, 'accessed', now_utc())
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
 			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
 	r := tx.SendBatch(context.Background(), b)
@@ -1466,7 +1494,7 @@ func (a *GoTags) getTag(c *gin.Context) {
 		"name":        name,
 		"category":    category,
 		"data":        data,
-		"modified_at": modifiedAt,
+		"modified_at": jstime(modifiedAt),
 	})
 }
 
@@ -1500,7 +1528,7 @@ func (a *GoTags) updateTag(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	updateData := d.Data
+	data := d.Data
 
 	// start transaction
 	tx, err := a.pool.Begin(context.Background())
@@ -1515,7 +1543,7 @@ func (a *GoTags) updateTag(c *gin.Context) {
 	var currentData map[string]any
 	row := tx.QueryRow(
 		context.Background(),
-		`SELECT name,category,data FROM tags WHERE id = $1;`, tag)
+		`SELECT name, category, data FROM tags WHERE id = $1;`, tag)
 	err = row.Scan(&name, &category, &currentData)
 	switch {
 	case err == pgx.ErrNoRows:
@@ -1533,14 +1561,14 @@ func (a *GoTags) updateTag(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	newData := f(currentData, updateData)
+	newData := f(currentData, data)
 
 	b := &pgx.Batch{}
 
 	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2;`, newData, tag)
 
 	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-			 VALUES ($1, $2, 'acted_on', current_timestamp)
+			 VALUES ($1, $2, 'acted_on', now_utc())
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
 			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
 
@@ -1575,6 +1603,7 @@ func (a *GoTags) updateTag(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data": newData,
 	})

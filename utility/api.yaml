@@ -388,7 +388,7 @@ paths:
 
         Profile is a backend storage for per-account UI data.
 
-        Use the latest profile modified_at value.
+        Use the latest profile timestamp value.
 
         Timestamp mechanism blocks out-of-sync updates from multiple sources.
       security:
@@ -412,7 +412,7 @@ paths:
         "401":
           description: Invalid token
         "409":
-          description: modified_at does not match modified_at in database
+          description: timestamp does not match timestamp in database
         "410":
           description: Failed, user gone?
       tags:
@@ -536,6 +536,8 @@ paths:
           description: Invalid token
         "404":
           description: Tag not found
+        "410":
+          description: Failed, tag/use gone?
       tags:
         - authorized
   /debug/reset:
@@ -632,37 +634,35 @@ definitions:
             properties:
               data:
                 type: object
-              modified_at:
+              timestamp:
                 type: string
           tags:
             type: array
             items:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  name:
-                    type: string
-                  category:
-                    type: string
-                  modified:
-                    type: string
-                  connected:
-                    type: string
-                  accessed:
-                    type: string
-                  acted_on:
-                    type: string
-                required:
-                  - id
-                  - name
-                  - category
-                  - modified
-                  - connected
-                  - accessed
-                  - acted_on
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                category:
+                  type: string
+                modified:
+                  type: string
+                connected:
+                  type: string
+                accessed:
+                  type: string
+                acted_on:
+                  type: string
+              required:
+                - id
+                - name
+                - category
+                - modified
+                - connected
+                - accessed
+                - acted_on
         required:
           - profile
           - tags
@@ -700,37 +700,35 @@ definitions:
             properties:
               data:
                 type: object
-              modified_at:
+              timestamp:
                 type: string
           tags:
             type: array
             items:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  name:
-                    type: string
-                  category:
-                    type: string
-                  modified:
-                    type: string
-                  connected:
-                    type: string
-                  accessed:
-                    type: string
-                  acted_on:
-                    type: string
-                required:
-                  - id
-                  - name
-                  - category
-                  - modified
-                  - connected
-                  - accessed
-                  - acted_on
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                category:
+                  type: string
+                modified:
+                  type: string
+                connected:
+                  type: string
+                accessed:
+                  type: string
+                acted_on:
+                  type: string
+              required:
+                - id
+                - name
+                - category
+                - modified
+                - connected
+                - accessed
+                - acted_on
         required:
           - profile
           - tags
@@ -742,6 +740,8 @@ definitions:
       email:
         type: string
       lang:
+        type: string
+      extra:
         type: string
     required:
       - email
@@ -773,41 +773,41 @@ definitions:
             properties:
               data:
                 type: object
-              modified_at:
+              timestamp:
                 type: string
           tags:
             type: array
             items:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  name:
-                    type: string
-                  category:
-                    type: string
-                  modified:
-                    type: string
-                  connected:
-                    type: string
-                  accessed:
-                    type: string
-                  acted_on:
-                    type: string
-                required:
-                  - id
-                  - name
-                  - category
-                  - modified
-                  - connected
-                  - accessed
-                  - acted_on
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                category:
+                  type: string
+                modified:
+                  type: string
+                connected:
+                  type: string
+                accessed:
+                  type: string
+                acted_on:
+                  type: string
+              required:
+                - id
+                - name
+                - category
+                - modified
+                - connected
+                - accessed
+                - acted_on
         required:
           - profile
           - tags
       token:
+        type: string
+      extra:
         type: string
   INAccount:
     type: object
@@ -834,11 +834,11 @@ definitions:
     properties:
       data:
         type: object
-      modified_at:
+      timestamp:
         type: string
     required:
       - profile
-      - modified_at
+      - timestamp
   INProfileTag:
     type: object
     properties:
@@ -856,7 +856,7 @@ definitions:
         properties:
           data:
             type: object
-          modified_at:
+          timestamp:
             type: string
       tags:
         type: array

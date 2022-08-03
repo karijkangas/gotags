@@ -115,6 +115,7 @@ type newPasswordOut struct {
 	Email string      `json:"email" binding:"required,email"`
 	Data  userDataOut `json:"data" binding:"required"`
 	Token string      `json:"token" binding:"required"`
+	Extra string      `json:"extra"`
 }
 
 type accountOut struct {
@@ -128,8 +129,8 @@ type userDataOut struct {
 }
 
 type profileData struct {
-	Data       map[string]any `json:"data" binding:"required"`
-	ModifiedAt string         `json:"modified_at" binding:"required"`
+	Data      map[string]any `json:"data" binding:"required"`
+	Timestamp string         `json:"timestamp" binding:"required"`
 }
 
 type tagStatus struct {
@@ -337,31 +338,24 @@ func checkResponseBody(t *testing.T, r *httptest.ResponseRecorder, want string) 
 	}
 }
 
-func getPending(t *testing.T, category string) (id, email string, data map[string]any) {
-	row := app.pool.QueryRow(
-		context.Background(),
-		fmt.Sprintf(`SELECT id, email, data FROM pending WHERE category = '%s';`, category),
-	)
-	err := row.Scan(&id, &email, &data)
-	if err != nil {
-		t.Fatalf("%s: query failed: %s", failPrefix(t, 2), err)
-	}
-	return
-}
-
-func getPendingJoin(t *testing.T) (id, name, email, passwordHash, extra string) {
-	id, email, data := getPending(t, "join")
-	name = data["name"].(string)
-	passwordHash = data["password_hash"].(string)
-	if data["extra"] != nil {
-		extra = data["extra"].(string)
+func getPendingJoin(t *testing.T, index int) (id, name, email, passwordHash, extra string) {
+	p := getAllPending(t, "join")[index]
+	id = p["id"]
+	email = p["email"]
+	name = p["name"]
+	passwordHash = p["password_hash"]
+	if p["extra"] != "" {
+		extra = p["extra"]
 	}
 	return id, name, email, passwordHash, extra
 }
 
-func getPendingResetPassword(t *testing.T) (id, email string) {
-	id, email, _ = getPending(t, "reset_password")
-	return id, email
+func getPendingResetPassword(t *testing.T, index int) (id, email, extra string) {
+	p := getAllPending(t, "reset_password")[index]
+	id = p["id"]
+	email = p["email"]
+	extra = p["extra"]
+	return id, email, extra
 }
 
 func getAllPending(t *testing.T, category string) (result []map[string]string) {
@@ -381,9 +375,6 @@ func getAllPending(t *testing.T, category string) (result []map[string]string) {
 		if err != nil {
 			t.Fatalf("%s: query failed: %s.", failPrefix(t, 2), err)
 		}
-		// if d == nil {
-		// 	d = map[string]string{}
-		// }
 		d["id"] = id
 		d["email"] = email
 		result = append(result, d)
@@ -396,7 +387,7 @@ func getPendingJoins(t *testing.T) (result []map[string]string) {
 	return getAllPending(t, "join")
 }
 
-func getPendingPasswordResets(t *testing.T) (result []map[string]string) {
+func getPendingResetPasswords(t *testing.T) (result []map[string]string) {
 	return getAllPending(t, "reset_password")
 }
 
@@ -565,7 +556,7 @@ func assertProfileCount(t *testing.T, want int) {
 	}
 }
 
-func addPendingJoin(t *testing.T, name, email, password string) string {
+func addPendingJoin(t *testing.T, name, email, password, extra string) string {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		t.Fatalf("%s: password hash failed: %s", failPrefix(t, 1), err)
@@ -573,6 +564,9 @@ func addPendingJoin(t *testing.T, name, email, password string) string {
 	data := map[string]string{
 		"name":          name,
 		"password_hash": string(passwordHash),
+	}
+	if extra != "" {
+		data["extra"] = extra
 	}
 	var id string
 	err = app.pool.QueryRow(
@@ -585,12 +579,16 @@ func addPendingJoin(t *testing.T, name, email, password string) string {
 	return id
 }
 
-func addPendingResetPassword(t *testing.T, email string) string {
+func addPendingResetPassword(t *testing.T, email, extra string) string {
 	var id string
+	data := map[string]string{}
+	if extra != "" {
+		data["extra"] = extra
+	}
 	err := app.pool.QueryRow(
 		context.Background(),
-		`INSERT INTO pending (email, category) VALUES ($1, 'reset_password') RETURNING id;`,
-		email).Scan(&id)
+		`INSERT INTO pending (email, category, data) VALUES ($1, 'reset_password', $2) RETURNING id;`,
+		email, data).Scan(&id)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}

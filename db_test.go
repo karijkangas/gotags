@@ -17,7 +17,7 @@ func TestCleanupJoins(t *testing.T) {
 	user := addUser(t, name, email, password)
 	addSession(t, user)
 
-	p := addPendingJoin(t, name, email, password)
+	p := addPendingJoin(t, name, email, password, "")
 	oldp := getPendingTime(t, -2)
 
 	var pd string
@@ -33,7 +33,7 @@ func TestCleanupJoins(t *testing.T) {
 	app.cleanupDB()
 	assertPendingJoinCount(t, 1)
 
-	pp, _, _, _, _ := getPendingJoin(t)
+	pp, _, _, _, _ := getPendingJoin(t, 0)
 	if pp != p {
 		t.Fatalf("unexpected pending join")
 	}
@@ -49,7 +49,7 @@ func TestCleanupPasswordResets(t *testing.T) {
 	user := addUser(t, name, email, password)
 	addSession(t, user)
 
-	p := addPendingResetPassword(t, email)
+	p := addPendingResetPassword(t, email, "")
 	oldp := getPendingTime(t, -2)
 
 	var pd string
@@ -65,7 +65,7 @@ func TestCleanupPasswordResets(t *testing.T) {
 	app.cleanupDB()
 	assertPendingResetPasswordCount(t, 1)
 
-	pp, _ := getPendingResetPassword(t)
+	pp, _, _ := getPendingResetPassword(t, 0)
 	if pp != p {
 		t.Fatalf("unexpected pending reset password")
 	}
@@ -151,7 +151,7 @@ func TestPendingJoinLimit(t *testing.T) {
 	defer resetLimits(t)
 
 	for i := 0; i < limit; i++ {
-		addPendingJoin(t, name, email, password)
+		addPendingJoin(t, name, email, password, "")
 	}
 	assertPendingJoinCount(t, limit)
 
@@ -211,7 +211,7 @@ func TestPendingResetPasswordLimit(t *testing.T) {
 	defer resetLimits(t)
 
 	for i := 0; i < limit; i++ {
-		addPendingResetPassword(t, email)
+		addPendingResetPassword(t, email, "")
 	}
 	assertPendingResetPasswordCount(t, limit)
 
@@ -268,7 +268,7 @@ func TestSessionLimitJoinActivate(t *testing.T) {
 	email := "johndoe@example.com"
 	password := "password1234"
 
-	id := addPendingJoin(t, name, email, password)
+	id := addPendingJoin(t, name, email, password, "")
 	user := addUser(t, name, email, password)
 
 	limit := 3
@@ -330,7 +330,7 @@ func TestSessionLimitNewPassword(t *testing.T) {
 	newPassword := "1234password"
 
 	user := addUser(t, name, email, password)
-	id := addPendingResetPassword(t, email)
+	id := addPendingResetPassword(t, email, "")
 
 	limit := 3
 	setLimits(t, limit, limit, limit)

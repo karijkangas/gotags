@@ -31,11 +31,11 @@ func TestDebugAPIReset(t *testing.T) {
 	clearTables(t)
 	profile := profileData{Data: map[string]any{}}
 
-	addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234")
+	addPendingJoin(t, "John Doe", "johndöe@example.com", "password1234", "")
 	user := addUser(t, "John Doe", "johndöe@example.com", "password1234")
 	updateProfile(t, user, profile)
 	addSession(t, user)
-	addPendingResetPassword(t, "johndöe@example.com")
+	addPendingResetPassword(t, "johndöe@example.com", "")
 
 	assertPendingJoinCount(t, 1)
 	assertUserCount(t, 1)
