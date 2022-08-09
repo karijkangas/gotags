@@ -20,34 +20,41 @@ import (
 )
 
 const (
-	// don't mess with these in production, keep backups todo
+	// dangerous, keep backups todo
 	passwordHashCost = bcrypt.DefaultCost
 	cleanupDBTimeUTC = "04:00"
 	pendingTTL       = "1 days"
 	sessionTTL       = "30 days"
+	adminSessionTTL  = "1 days"
 	emailTTL         = "1 days"
 	maxBodySize      = 10240
 )
 
 var paths = map[string]string{
-	// public api
+	// public API
 	"joinCheck":     "/api/join/check", // *
 	"join":          "/api/join",
 	"joinActivate":  "/api/join/activate",
 	"signin":        "/api/signin",
 	"resetPassword": "/api/reset-password",
 	"newPassword":   "/api/reset-password/new",
-	//private api
-	"auth":              "",
-	"auth_session":      "/api/auth/session",
-	"auth_account":      "/api/auth/account",
-	"auth_data":         "/api/auth/your-data",
-	"auth_data_profile": "/api/auth/your-data/profile",
-	"auth_data_tags":    "/api/auth/your-data/tags",
-	"auth_data_tags_dc": "/api/auth/your-data/tags/dc",
-	"auth_password":     "/api/auth/password",
-	"auth_tags":         "/api/auth/tags/:id",
-	// debug api
+	// private API
+	"auth":                  "",
+	"auth_session":          "/api/auth/session",
+	"auth_account":          "/api/auth/account",
+	"auth_account_remove":   "/api/auth/account/remove",
+	"auth_data":             "/api/auth/your-data",
+	"auth_data_profile":     "/api/auth/your-data/profile",
+	"auth_data_tags":        "/api/auth/your-data/tags",
+	"auth_data_tags_remove": "/api/auth/your-data/tags/remove",
+	"auth_password":         "/api/auth/password",
+	"auth_tags":             "/api/auth/tags/:id",
+	// admin API
+	"admin":            "",
+	"admin_signin":     "/api/admin/signin",
+	"admin_tags":       "/api/admin/tags",
+	"admin_tags_reset": "/api/admin/tags/:id/reset",
+	// debug API
 	"debug_reset":   "/debug/reset",
 	"debug_pending": "/debug/pending",
 }
@@ -93,6 +100,40 @@ func (a *GoTags) auth() gin.HandlerFunc {
 		err = a.pool.QueryRow(
 			context.Background(),
 			`SELECT (user_id) FROM sessions WHERE id = $1;`,
+			token).Scan(&user)
+		if err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		c.Set("session", Session{user, token})
+		c.Next()
+	}
+}
+
+// adminAuth middleware. Admin token is http header variable with
+// format "Token": "uuid-v4". Admin sessions are stored in database.
+func (a *GoTags) adminAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokens, ok := c.Request.Header["Token"]
+		if !ok {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		// use the first value.
+		token := tokens[0]
+
+		// just in case; validate token before use for db query
+		err := a.inputValidator.Var(token, "required,uuid")
+		if err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+		}
+
+		var user int
+		// var name, email string // excluding password_hash.
+		err = a.pool.QueryRow(
+			context.Background(),
+			`SELECT (user_id) FROM admin_sessions WHERE id = $1;`,
 			token).Scan(&user)
 		if err != nil {
 			c.AbortWithStatus(http.StatusUnauthorized)
@@ -157,14 +198,23 @@ func (a *GoTags) initialize(databaseURL string) {
 		authorized.DELETE(paths["auth_session"], a.deleteSession)
 		authorized.GET(paths["auth_account"], a.getAccount)
 		authorized.PUT(paths["auth_account"], a.updateAccount)
-		authorized.DELETE(paths["auth_account"], a.deleteAccount)
+		authorized.POST(paths["auth_account_remove"], a.removeAccount)
 		authorized.GET(paths["auth_data"], a.getData)
 		authorized.POST(paths["auth_data_profile"], a.updateProfile)
-		authorized.POST(paths["auth_data_tags"], a.connectTags)
-		authorized.POST(paths["auth_data_tags_dc"], a.disconnectTags)
+		authorized.POST(paths["auth_data_tags"], a.addTags)
+		authorized.POST(paths["auth_data_tags_remove"], a.removeTags)
 		authorized.POST(paths["auth_password"], a.updatePassword)
 		authorized.GET(paths["auth_tags"], a.getTag)
 		authorized.POST(paths["auth_tags"], a.updateTag)
+	}
+
+	router.POST(paths["admin_signin"], a.adminSignin)
+
+	admin := router.Group(paths["admin"])
+	admin.Use(a.adminAuth())
+	{
+		admin.POST(paths["admin_tags"], a.adminAddTag)
+		admin.POST(paths["admin_tags_reset"], a.adminResetTag)
 	}
 
 	a.pool = pool
@@ -194,6 +244,7 @@ func (a *GoTags) cleanupDB() {
 	b := &pgx.Batch{} // todo obv
 	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%s';`, pendingTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%s';`, sessionTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM admin_sessions WHERE created_at < now() - interval '%s';`, adminSessionTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM limiter WHERE created_at < now() - interval '%s';`, emailTTL))
 	r := a.pool.SendBatch(context.Background(), b)
 	defer r.Close()
@@ -217,20 +268,9 @@ func (a *GoTags) run(server string) {
 	a.router.Run(server)
 }
 
-// type utcTime struct {
-//     time.Time
-// }
-
-// func (tt *utcTime) Scan(src interface{}) error {
-//     if t, ok := src.(time.Time); ok {
-//         tt.Time = t.In(time.UTC)
-//         return nil
-//     }
-//     return fmt.Errorf("utcTime: unsupported type %T", src)
-// }
-
+// convert time.Time to JavaScript new Date compatible format
 func jstime(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+	return t.Format("2006-01-02T15:04:05.000Z")
 }
 
 // ******************************************************************
@@ -608,7 +648,7 @@ func (a *GoTags) joinActivate(c *gin.Context) {
 	case err != nil:
 		switch e := err.(type) {
 		case *pgconn.PgError:
-			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+			if e.Code == "P0001" /* && e.Message == "sessions: no capacity" */ {
 				c.Status(http.StatusTooManyRequests)
 				return
 			}
@@ -709,7 +749,7 @@ func (a *GoTags) signin(c *gin.Context) {
 	case err != nil:
 		switch e := err.(type) {
 		case *pgconn.PgError:
-			if e.Code == "P0001" && e.Message == "sessions: no capacity" {
+			if e.Code == "P0001" /* && e.Message == "sessions: no capacity" */ {
 				c.Status(http.StatusTooManyRequests)
 				return
 			}
@@ -1078,7 +1118,7 @@ func (a *GoTags) updateAccount(c *gin.Context) {
 }
 
 //
-func (a *GoTags) deleteAccount(c *gin.Context) {
+func (a *GoTags) removeAccount(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
@@ -1181,7 +1221,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 	user := currentSession(c).User
 
 	var d struct {
-		Data      map[string]any `json:"data" binding:"required,max=1024"`
+		Data      map[string]any `json:"data" binding:"required"`
 		Timestamp string         `json:"timestamp" binding:"required,max=1024,datetime=2006-01-02T15:04:05Z07:00"`
 	}
 	if err := c.BindJSON(&d); err != nil {
@@ -1230,7 +1270,7 @@ func (a *GoTags) updateProfile(c *gin.Context) {
 }
 
 //
-func (a *GoTags) connectTags(c *gin.Context) {
+func (a *GoTags) addTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
@@ -1297,7 +1337,7 @@ func (a *GoTags) connectTags(c *gin.Context) {
 }
 
 //
-func (a *GoTags) disconnectTags(c *gin.Context) {
+func (a *GoTags) removeTags(c *gin.Context) {
 	session := currentSession(c)
 
 	var d struct {
@@ -1444,7 +1484,7 @@ func (a *GoTags) getTag(c *gin.Context) {
 
 	var name, category string
 	var data map[string]any
-	var modifiedAt time.Time
+	var modifiedAt, eventAt time.Time
 
 	b := &pgx.Batch{}
 
@@ -1455,7 +1495,8 @@ func (a *GoTags) getTag(c *gin.Context) {
 	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
 	         VALUES ($1, $2, 'accessed', now_utc())
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
-			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
+			 SET event_at=EXCLUDED.event_at
+			 RETURNING event_at;`, session.User, tag)
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
@@ -1472,15 +1513,17 @@ func (a *GoTags) getTag(c *gin.Context) {
 	}
 
 	// 2
-	t, err := r.Exec()
+	row = r.QueryRow()
+	err = row.Scan(&eventAt)
 	switch {
-	case t.RowsAffected() == 0:
+	case err == pgx.ErrNoRows:
 		c.Status(http.StatusGone)
 		return
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
 		return
 	}
+
 	r.Close()
 
 	// commit transaction
@@ -1491,24 +1534,40 @@ func (a *GoTags) getTag(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"name":        name,
-		"category":    category,
-		"data":        data,
-		"modified_at": jstime(modifiedAt),
+		"tag": gin.H{
+			"id":          tag,
+			"name":        name,
+			"category":    category,
+			"data":        data,
+			"modified_at": jstime(modifiedAt),
+		},
+		"accessed": jstime(eventAt),
 	})
 }
 
-type tagFunc func(currentData, updateData map[string]any) (newData map[string]any)
+type tagFunc func(currentData, updateData map[string]any) (newData map[string]any, ok bool)
 
-func nopHandler(currentData, updateData map[string]any) map[string]any {
-	return updateData
+func nopHandler(currentData, updateData map[string]any) (map[string]any, bool) {
+	return updateData, true
+}
+
+func counterHandler(currentData, updateData map[string]any) (map[string]any, bool) {
+	counter, ok := (currentData["counter"]).(int)
+	if ok {
+		updateData["counter"] = counter + 1
+		return updateData, true
+	}
+	return updateData, false
+}
+
+func anticounterHandler(currentData, updateData map[string]any) (map[string]any, bool) {
+	return updateData, true
 }
 
 var tagHandlers = map[string]tagFunc{
-	"nop": nopHandler,
-	// todo
-	// "counter": nil,
-	// "anti-counter": nil,
+	"nop":         nopHandler,
+	"counter":     counterHandler,
+	"anticounter": anticounterHandler,
 }
 
 func (a *GoTags) updateTag(c *gin.Context) {
@@ -1561,37 +1620,49 @@ func (a *GoTags) updateTag(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	newData := f(currentData, data)
+	newData, ok := f(currentData, data)
+	if !ok {
+		tx.Rollback(context.Background())
+		c.Status(http.StatusForbidden)
+		return
+	}
+
+	var modifiedAt, eventAt time.Time
 
 	b := &pgx.Batch{}
 
-	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2;`, newData, tag)
+	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2 RETURNING modified_at;`, newData, tag)
 
 	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
 			 VALUES ($1, $2, 'acted_on', now_utc())
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
-			 SET event_at=EXCLUDED.event_at;`, session.User, tag)
+			 SET event_at=EXCLUDED.event_at
+			 RETURNING event_at;`, session.User, tag)
 
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 
-	t, err := r.Exec()
+	// 1
+	row = r.QueryRow()
+	err = row.Scan(&modifiedAt)
 	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
-		return
-	case t.RowsAffected() == 0:
-		c.Status(http.StatusGone)
 		return
 	}
 
-	t, err = r.Exec()
+	// 2
+	row = r.QueryRow()
+	err = row.Scan(&eventAt)
 	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
 	case err != nil:
 		c.Status(http.StatusInternalServerError)
-		return
-	case t.RowsAffected() == 0:
-		c.Status(http.StatusGone)
 		return
 	}
 
@@ -1605,6 +1676,255 @@ func (a *GoTags) updateTag(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"data": newData,
+		"tag": gin.H{
+			"id":          tag,
+			"name":        name,
+			"category":    category,
+			"data":        data,
+			"modified_at": jstime(modifiedAt),
+		},
+		"acted_on": jstime(eventAt),
+	})
+}
+
+//
+func (a *GoTags) adminSignin(c *gin.Context) {
+	var d struct {
+		Email    string `json:"email" binding:"required,email,max=1024"`
+		Password string `json:"password" binding:"required,min=1,max=1024"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	email := d.Email
+	password := d.Password
+
+	// begin transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	// get user data if user is found in admins table
+	var user int
+	var name, passwordHash string
+	row := tx.QueryRow(
+		context.Background(),
+		`WITH xu AS (
+			SELECT id, name, password_hash FROM users WHERE email = $1
+		 )
+		 SELECT u.id, name, password_hash FROM admins AS a JOIN xu AS u ON a.user_id = u.id;`,
+		email)
+	err = row.Scan(&user, &name, &passwordHash)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusUnauthorized)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// validate password
+	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
+	if err != nil {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	// create an admin session
+	var token string
+	row = tx.QueryRow(
+		context.Background(),
+		`INSERT INTO admin_sessions (user_id)
+			VALUES ($1)
+			RETURNING id;`,
+		user)
+	err = row.Scan(&token)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"name":  name,
+		"email": email,
+		"token": token,
+	})
+}
+
+//
+func (a *GoTags) adminAddTag(c *gin.Context) {
+	var d struct {
+		Name     string         `json:"name" binding:"required,min=1,max=1024"`
+		Category string         `json:"category" binding:"required,min=1,max=1024"`
+		Custom   map[string]any `json:"custom"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	name := d.Name
+	category := d.Category
+	custom := d.Custom
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	var data map[string]any
+
+	if len(custom) > 0 {
+		data = custom
+	} else {
+		row := tx.QueryRow(
+			context.Background(),
+			`SELECT default_data FROM tag_catalog WHERE category = $1;`,
+			category)
+		err = row.Scan(&data)
+		switch {
+		case err == pgx.ErrNoRows:
+			c.Status(http.StatusNotFound)
+			return
+		case err != nil:
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	var id string
+	var modifiedAt time.Time
+	row := tx.QueryRow(
+		context.Background(),
+		`INSERT INTO tags (name, category, data)
+			VALUES ($1, $2, $3)
+			RETURNING id, modified_at;`,
+		name, category, data)
+	err = row.Scan(&id, &modifiedAt)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          id,
+		"name":        name,
+		"category":    category,
+		"data":        data,
+		"modified_at": jstime(modifiedAt),
+	})
+}
+
+//
+func (a *GoTags) adminResetTag(c *gin.Context) {
+	var tp tagPath
+	if err := c.ShouldBindUri(&tp); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	tag := tp.ID
+
+	var d struct {
+		Custom map[string]any `json:"custom"`
+	}
+	if err := c.BindJSON(&d); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	custom := d.Custom
+
+	// start transaction
+	tx, err := a.pool.Begin(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	var name, category string
+	var defaultData map[string]any
+	row := tx.QueryRow(
+		context.Background(),
+		`WITH xt AS (SELECT name, category FROM tags WHERE id = $1)
+		 SELECT t.name, t.category, default_data
+		 FROM tag_catalog AS tc
+		 JOIN xt AS t ON tc.category = t.category;`,
+		tag)
+	err = row.Scan(&name, &category, &defaultData)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusNotFound)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	var data map[string]any
+
+	if len(custom) > 0 {
+		data = custom
+	} else {
+		data = defaultData
+	}
+
+	var modifiedAt time.Time
+	row = tx.QueryRow(
+		context.Background(),
+		`UPDATE tags SET data = $1 WHERE id = $2 RETURNING modified_at;`,
+		data, tag)
+	err = row.Scan(&modifiedAt)
+	switch {
+	case err == pgx.ErrNoRows:
+		c.Status(http.StatusGone)
+		return
+	case err != nil:
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec(
+		context.Background(),
+		`DELETE FROM tag_events WHERE tag_id = $1;`,
+		tag)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// commit transaction
+	err = tx.Commit(context.Background())
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":          tag,
+		"name":        name,
+		"category":    category,
+		"data":        data,
+		"modified_at": jstime(modifiedAt),
 	})
 }

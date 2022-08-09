@@ -144,10 +144,21 @@ type tagStatus struct {
 }
 
 type tagOut struct {
+	ID         string  `json:"id" binding:"required,uuid"`
 	Name       string  `json:"name" binding:"required,min=1"`
 	Category   string  `json:"category" binding:"required,min=1"`
 	Data       tagData `json:"data" binding:"required"`
 	ModifiedAt string  `json:"modified_at" binding:"required"`
+}
+
+type tagOutGet struct {
+	Tag      tagOut `json:"tag" binding:"required"`
+	Accessed string `json:"accessed" binding:"required"`
+}
+
+type tagOutPost struct {
+	Tag     tagOut `json:"tag" binding:"required"`
+	ActedOn string `json:"acted_on" binding:"required"`
 }
 
 type tagData map[string]any
@@ -160,9 +171,11 @@ type tagDataOut struct {
 	Data tagData `json:"data" binding:"required"`
 }
 
-// type tagData struct {
-// 	Data map[string]any `json:"data" binding:"required"`
-// }
+type adminSigninOut struct {
+	Name  string `json:"name" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
+	Token string `json:"token" binding:"required"`
+}
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -241,9 +254,11 @@ func clearTables(t *testing.T, tables ...string) {
 			"users",
 			"profiles",
 			"sessions",
-			"tag_catalog",
+			// "tag_catalog",
 			"tags",
 			"tag_events",
+			"admins",
+			"admin_sessions",
 		}
 	}
 	_, err := app.pool.Exec(
@@ -320,8 +335,8 @@ func doPatch(t *testing.T, path string, data []byte, token string) *httptest.Res
 	return doMethod(t, "PATCH", path, data, token)
 }
 
-func doDelete(t *testing.T, path string, data []byte, token string) *httptest.ResponseRecorder {
-	return doMethod(t, "DELETE", path, data, token)
+func doDelete(t *testing.T, path string, token string) *httptest.ResponseRecorder {
+	return doMethod(t, "DELETE", path, nil, token)
 }
 
 func checkResponseCode(t *testing.T, r *httptest.ResponseRecorder, want int) {
@@ -501,6 +516,15 @@ func assertUserCount(t *testing.T, want int) {
 	}
 }
 
+func addAdmin(t *testing.T, user int) {
+	_, err := app.pool.Exec(context.Background(),
+		`INSERT INTO admins (user_id) VALUES ($1);`,
+		user)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+}
+
 func addSession(t *testing.T, user int) string {
 	var id string
 	err := app.pool.QueryRow(
@@ -531,6 +555,39 @@ func assertSessionCount(t *testing.T, want int) {
 	}
 	if count != want {
 		t.Fatalf("%s: count sessions. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
+}
+
+func addAdminSession(t *testing.T, user int) string {
+	var id string
+	err := app.pool.QueryRow(
+		context.Background(),
+		`INSERT INTO admin_sessions (user_id) VALUES ($1) RETURNING id;`, user).Scan(&id)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return id
+}
+
+func getAdminSession(t *testing.T, user int) (session string) {
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT id FROM admin_sessions WHERE user_id = $1;`, user).Scan(&session)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	return session
+}
+
+func assertAdminSessionCount(t *testing.T, want int) {
+	var count int
+	err := app.pool.QueryRow(context.Background(),
+		`SELECT COUNT(id) FROM admin_sessions;`).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: count admin sessions. Got %d. Want %d", failPrefix(t, 1), count, want)
 	}
 }
 
@@ -642,7 +699,6 @@ func assertUserDataTags(t *testing.T, got userDataOut, want []string) {
 	for _, tag := range got.Tags {
 		if !contains(want, tag.ID) {
 			t.Fatalf("%s: unexpected tag %s", failPrefix(t, 1), tag.ID)
-
 		}
 	}
 }
@@ -749,9 +805,17 @@ func assertTagsConnected(t *testing.T, tags []tagStatus) {
 	}
 }
 
-func assertTagConnected(t *testing.T, tags ...tagStatus) {
+func assertTagJustConnected(t *testing.T, tags ...tagStatus) {
 	for _, tag := range tags {
 		if tag.Connected == "" || tag.Accessed != "" || tag.ActedOn != "" {
+			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		}
+	}
+}
+
+func assertTagConnected(t *testing.T, tags ...tagStatus) {
+	for _, tag := range tags {
+		if tag.Connected == "" {
 			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
 		}
 	}
@@ -810,9 +874,33 @@ func assertUserTagCount(t *testing.T, user int, want int) {
 	}
 }
 
+func addUserTagEvent(t *testing.T, user int, tag string, category string, eventAt time.Time) {
+	_, err := app.pool.Exec(context.Background(),
+		`INSERT INTO tag_events (user_id, tag_id, category, event_at)
+		 VALUES ($1, $2, $3, $4);`,
+		user, tag, category, eventAt)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+}
+
+func assertUserTagEventCount(t *testing.T, user int, tag string, want int) {
+	var count int
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT COUNT(tag_id) FROM tag_events
+		 WHERE user_id = $1 AND tag_id = $2;`, user, tag).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: counting tag events. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
+}
+
 func assertTagOut(t *testing.T, got tagOut, want tagOut) {
 	temp := got.ModifiedAt
-	// TODO: validate got.ModifiedAt
+	// TODO: validate got.ModifiedAt somehow?
 	got.ModifiedAt = ""
 	gots := fmt.Sprintf("%v", got)
 	wants := fmt.Sprintf("%v", want)
@@ -878,6 +966,33 @@ func getSessionTime(t *testing.T, addDays int) (session time.Time) {
 	return fromTTL(t, sessionTTL, addDays)
 }
 
+func getAdminSessionTime(t *testing.T, addDays int) (session time.Time) {
+	return fromTTL(t, adminSessionTTL, addDays)
+}
+
 func getEmailTime(t *testing.T, addDays int) (email time.Time) {
 	return fromTTL(t, emailTTL, addDays)
+}
+
+func assertTimestamp(t *testing.T, timestamp string, start, end time.Time) {
+	ends := jstime(end.UTC())
+	starts := jstime(start.UTC())
+
+	if timestamp < starts || timestamp > ends {
+		t.Fatalf("%s: invalid timestamp: %s", failPrefix(t, 1), timestamp)
+	}
+}
+
+func assertTagEventsCount(t *testing.T, tag string, want int) {
+	var count int
+
+	err := app.pool.QueryRow(
+		context.Background(),
+		`SELECT COUNT(id) FROM tag_events WHERE tag_id = $1;`, tag).Scan(&count)
+	if err != nil {
+		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
+	}
+	if count != want {
+		t.Fatalf("%s: counting tag_events items. Got %d. Want %d", failPrefix(t, 1), count, want)
+	}
 }

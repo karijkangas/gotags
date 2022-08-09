@@ -40,6 +40,7 @@ func (a *GoTags) debugAPIReset(c *gin.Context) {
 	b.Queue("DELETE FROM users;")
 	b.Queue("ALTER SEQUENCE users_id_seq RESTART;")
 	// TODO: tags
+	// TODO: sessions, admin sessions, etc
 	r := tx.SendBatch(context.Background(), b)
 	defer r.Close()
 

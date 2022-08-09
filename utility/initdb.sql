@@ -9,19 +9,12 @@ DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 
-
--- DROP TRIGGER IF EXISTS set_users_timestamp ON users;
--- DROP TRIGGER IF EXISTS set_profiles_timestamp ON profiles;
--- DROP TRIGGER IF EXISTS check_pending_capacity ON pending;
--- DROP TRIGGER IF EXISTS check_sessions_capacity ON sessions;
--- DROP TRIGGER IF EXISTS set_sessions_timestamp ON sessions;
-
 -- ********** common **********
 
 CREATE OR REPLACE FUNCTION now_utc()
-RETURNS TIMESTAMP AS $$
-  SELECT now() AT TIME ZONE 'utc';
-$$ LANGUAGE plpgsql;
+RETURNS TIMESTAMP WITH TIME ZONE AS $$
+  SELECT now() AT TIME ZONE 'utc'
+$$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION trigger_update_modified_at()
 RETURNS TRIGGER AS $$
@@ -90,6 +83,7 @@ BEFORE INSERT ON pending
 FOR EACH ROW EXECUTE PROCEDURE check_pending_capacity();
 
 -- ********** limiter **********
+
 CREATE TABLE IF NOT EXISTS limiter (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL,
@@ -161,13 +155,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMP WITH TIME ZONE default now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
-  -- CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
--- CREATE TRIGGER set_sessions_timestamp
--- BEFORE UPDATE ON sessions
--- FOR EACH ROW
--- EXECUTE FUNCTION trigger_update_modified_at();
 
 CREATE OR REPLACE FUNCTION check_sessions_capacity()
   RETURNS TRIGGER AS $$
@@ -186,19 +174,25 @@ CREATE TRIGGER check_sessions_capacity
 BEFORE INSERT ON sessions
 FOR EACH ROW EXECUTE PROCEDURE check_sessions_capacity();
 
--- ********** tags **********
+-- ********** tag_catalog **********
 
 DROP TABLE IF EXISTS tag_catalog CASCADE;
-DROP TABLE IF EXISTS tags CASCADE;
-DROP TABLE IF EXISTS tag_events CASCADE;
 
 CREATE TABLE IF NOT EXISTS tag_catalog (
   id SERIAL PRIMARY KEY,
-  category TEXT NOT NULL,
+  category TEXT NOT NULL UNIQUE,
   default_data JSONB not null default '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE default now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
+
+INSERT INTO tag_catalog (category, default_data) VALUES ('nop', '{}');
+INSERT INTO tag_catalog (category, default_data) VALUES ('counter', '{"counter": 0}');
+INSERT INTO tag_catalog (category, default_data) VALUES ('anticounter', '{}');
+
+-- ********** tags **********
+
+DROP TABLE IF EXISTS tags CASCADE;
 
 CREATE TABLE IF NOT EXISTS tags (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
@@ -209,6 +203,17 @@ CREATE TABLE IF NOT EXISTS tags (
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
+DROP TRIGGER IF EXISTS set_tags_timestamp ON tags;
+
+CREATE TRIGGER set_tags_timestamp
+BEFORE UPDATE ON tags
+FOR EACH ROW
+EXECUTE FUNCTION trigger_update_modified_at();
+
+-- ********** tag_events **********
+
+DROP TABLE IF EXISTS tag_events CASCADE;
+
 CREATE TABLE IF NOT EXISTS tag_events (
   user_id INTEGER,
   tag_id UUID NOT NULL,
@@ -216,27 +221,23 @@ CREATE TABLE IF NOT EXISTS tag_events (
   event_at TIMESTAMP WITH TIME ZONE default now_utc(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_tag FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-  -- UNIQUE (user_id, tag_id, category)
-  -- CONSTRAINT tag_events_pkey PRIMARY KEY (user_id, tag_id, category)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS tag_events_idx ON tag_events (user_id, tag_id, category);
 
--- CREATE OR REPLACE FUNCTION trigger_update_event_at()
--- RETURNS TRIGGER AS $$
--- BEGIN
---   NEW.event_at = now_utc();
---   RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
+-- ********** admins **********
 
--- CREATE TRIGGER set_tag_events_event_at
--- BEFORE UPDATE ON tag_events
--- FOR EACH ROW
--- EXECUTE FUNCTION trigger_update_event_at();
+CREATE TABLE IF NOT EXISTS admins (
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE default now_utc()
+);
 
--- -- ********** profile keys **********
--- CREATE TABLE IF NOT EXISTS profile_keys (
---   key TEXT UNIQUE NOT NULL PRIMARY KEY
--- );
+CREATE UNIQUE INDEX IF NOT EXISTS admins_idx ON admins (user_id);
 
+-- ********** admin_sessions **********
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE default now_utc()
+);

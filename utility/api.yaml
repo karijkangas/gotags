@@ -22,11 +22,17 @@ securityDefinitions:
     type: apiKey
     in: header
     name: Token
+  ApiKeyAdminAuth:
+    type: apiKey
+    in: header
+    name: Token
 tags:
   - name: public
     description: Public API
   - name: authorized
     description: Authorized API
+  - name: admin
+    description: Administrator API
   - name: debug
     description: Debug API
 paths:
@@ -127,13 +133,13 @@ paths:
   /signin:
     post:
       description: |
-        Signin with email and password.
+        Signin with email and password. Returns a session token.
 
         The number of active sessions per email address is limited.
 
-        A session has a time-to-live (ttl) counter.
-        A session becomes void once ttl counter reaches zero.
-        A session can be renewed, which resets its ttl counter.
+        A session has a time-to-live (ttl) timer.
+        A session becomes void once ttl timer reaches zero.
+        A session can be renewed, which resets its ttl timer.
       parameters:
         - description: Input data
           in: body
@@ -145,7 +151,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Signed in
+          description: Session token created
           schema:
             $ref: "#/definitions/OUTSignin"
         "400":
@@ -331,9 +337,10 @@ paths:
           description: Failed, user gone?
       tags:
         - authorized
-    delete:
+  /auth/account/remove:
+    post:
       description: |
-        Delete account.
+        Remove account.
 
         Beware: removes all data (sessions, account, user data) from the database.
 
@@ -346,12 +353,12 @@ paths:
           name: data
           required: true
           schema:
-            $ref: "#/definitions/INDeleteAccount"
+            $ref: "#/definitions/INRemoveAccount"
       produces:
         - application/json
       responses:
         "204":
-          description: Account deleted
+          description: Account removed
         "400":
           description: Invalid password
         "401":
@@ -386,7 +393,7 @@ paths:
       description: |
         Set user profile.
 
-        Profile is a backend storage for per-account UI data.
+        A profile contains backend-stored per-user data for UI.
 
         Use the latest profile timestamp value.
 
@@ -412,7 +419,7 @@ paths:
         "401":
           description: Invalid token
         "409":
-          description: timestamp does not match timestamp in database
+          description: timestamp does not match the current timestamp in the backend
         "410":
           description: Failed, user gone?
       tags:
@@ -420,7 +427,12 @@ paths:
   /auth/your-data/tags:
     post:
       description: |
-        Connect tags to user.
+        Add tags to user data.
+
+        The moment of add becomes the added timestamp for the tag. Accessed and acted_on
+        timestamps start as empty strings.
+
+        Invalid tag results in a failure in which no tags are added to the user data.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -434,7 +446,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Tags connected
+          description: Tags added to user data
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
@@ -447,12 +459,12 @@ paths:
           description: Failed, user gone?
       tags:
         - authorized
-  /auth/your-data/tags/dc:
+  /auth/your-data/tags/remove:
     post:
       description: |
-        Disconnect tags from user.
+        Remove tags from user data.
 
-        Unknown tags are ignored.
+        Tags not in user data are ignored.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -466,7 +478,7 @@ paths:
         - application/json
       responses:
         "200":
-          description: Tags disconnected
+          description: Tags removed from user data
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
@@ -481,6 +493,8 @@ paths:
     get:
       description: |
         Get tag data.
+
+        Returns tag data and associated accessed timestamp.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -496,7 +510,7 @@ paths:
         "200":
           description: Tag data
           schema:
-            $ref: "#/definitions/OUTTag"
+            $ref: "#/definitions/OUTGetTag"
         "401":
           description: Invalid token
         "404":
@@ -508,6 +522,8 @@ paths:
         Update tag data.
 
         Tag category handlers process input to output.
+
+        Returns updated tag data and associated acted_on timestamp.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -529,7 +545,107 @@ paths:
         "200":
           description: Tag data updated
           schema:
-            $ref: "#/definitions/OUTTagData"
+            $ref: "#/definitions/OUTPostTag"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid token
+        "403":
+          description: Bad data
+        "404":
+          description: Tag not found
+        "410":
+          description: Failed, tag/use gone?
+      tags:
+        - authorized
+  /admin/signin:
+    post:
+      description: |
+        Signin for administrators. Returns an administrator session token.
+
+        An administrator session has a time-to-live (ttl) timer.
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INAdminSignin"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Administrator session token created
+          schema:
+            $ref: "#/definitions/OUTAdminSignin"
+        "400":
+          description: Invalid data
+        "401":
+          description: Incorrect email/password
+      tags:
+        - admin
+  /admin/tags:
+    post:
+      description: |
+        Add a tag.
+
+        Each tag is identified by a unique uuiv4 id string.
+
+        Tag starts with category default data. Alternatively, provide custom data.
+      security:
+        - ApiKeyAdminAuth: []
+      parameters:
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INTag"
+      produces:
+        - application/json
+      responses:
+        "201":
+          description: Tag created
+          schema:
+            $ref: "#/definitions/OUTTag"
+        "400":
+          description: Invalid data
+        "401":
+          description: Invalid admin token
+        "410":
+          description: Failed, tag/use gone?
+      tags:
+        - admin
+  /admin/tags/{id}/reset:
+    post:
+      description: |
+        Reset tag data.
+
+        Tag data resets to tag category default data. Alternatively, provide custom data.
+
+        Reset clears all events (added, accessed, acted_on) related to the tag for all users.
+      security:
+        - ApiKeyAdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Tag ID
+          required: true
+          schema:
+            type: string
+        - description: Input data
+          in: body
+          name: data
+          required: true
+          schema:
+            $ref: "#/definitions/INResetTag"
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Tag data reset
+          schema:
+            $ref: "#/definitions/OUTTag"
         "400":
           description: Invalid data
         "401":
@@ -539,7 +655,7 @@ paths:
         "410":
           description: Failed, tag/use gone?
       tags:
-        - authorized
+        - admin
   /debug/reset:
     post:
       description: |
@@ -649,7 +765,7 @@ definitions:
                   type: string
                 modified:
                   type: string
-                connected:
+                added:
                   type: string
                 accessed:
                   type: string
@@ -660,7 +776,7 @@ definitions:
                 - name
                 - category
                 - modified
-                - connected
+                - added
                 - accessed
                 - acted_on
         required:
@@ -715,7 +831,7 @@ definitions:
                   type: string
                 modified:
                   type: string
-                connected:
+                added:
                   type: string
                 accessed:
                   type: string
@@ -726,7 +842,7 @@ definitions:
                 - name
                 - category
                 - modified
-                - connected
+                - added
                 - accessed
                 - acted_on
         required:
@@ -788,7 +904,7 @@ definitions:
                   type: string
                 modified:
                   type: string
-                connected:
+                added:
                   type: string
                 accessed:
                   type: string
@@ -799,7 +915,7 @@ definitions:
                 - name
                 - category
                 - modified
-                - connected
+                - added
                 - accessed
                 - acted_on
         required:
@@ -819,7 +935,7 @@ definitions:
     properties:
       name:
         type: string
-  INDeleteAccount:
+  INRemoveAccount:
     type: object
     properties:
       email:
@@ -861,32 +977,30 @@ definitions:
       tags:
         type: array
         items:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-              name:
-                type: string
-              category:
-                type: string
-              modified:
-                type: string
-              connected:
-                type: string
-              accessed:
-                type: string
-              acted_on:
-                type: string
-            required:
-              - id
-              - name
-              - category
-              - modified
-              - connected
-              - accessed
-              - acted_on
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            category:
+              type: string
+            modified:
+              type: string
+            added:
+              type: string
+            accessed:
+              type: string
+            acted_on:
+              type: string
+          required:
+            - id
+            - name
+            - category
+            - modified
+            - added
+            - accessed
+            - acted_on
     required:
       - profile
       - tags
@@ -936,6 +1050,58 @@ definitions:
       - category
       - data
       - modified_at
+  OUTGetTag:
+    type: object
+    properties:
+      tag:
+        type: object
+        properties:
+          id:
+            type: string
+          name:
+            type: string
+          category:
+            type: string
+          data:
+            type: object
+          modified_at:
+            type: string
+        required:
+          - name
+          - category
+          - data
+          - modified_at
+      accessed:
+        type: string
+    required:
+      - tag
+      - accessed
+  OUTPostTag:
+    type: object
+    properties:
+      tag:
+        type: object
+        properties:
+          id:
+            type: string
+          name:
+            type: string
+          category:
+            type: string
+          data:
+            type: object
+          modified_at:
+            type: string
+        required:
+          - name
+          - category
+          - data
+          - modified_at
+      acted_on:
+        type: string
+    required:
+      - tag
+      - acted_on
   INTagData:
     type: object
     properties:
@@ -950,6 +1116,42 @@ definitions:
         type: object
     required:
       - data
+  INAdminSignin:
+    type: object
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    required:
+      - email
+      - password
+  OUTAdminSignin:
+    type: object
+    properties:
+      name:
+        type: string
+      email:
+        type: string
+      token:
+        type: string
+  INTag:
+    type: object
+    properties:
+      name:
+        type: string
+      category:
+        type: string
+      custom:
+        type: object
+    required:
+      - name
+      - category
+  INResetTag:
+    type: object
+    properties:
+      custom:
+        type: object
   OUTDebugGetPending:
     type: object
     properties:

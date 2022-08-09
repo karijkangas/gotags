@@ -68,7 +68,7 @@ func TestDebugAPIGetPendingJoin(t *testing.T) {
 	lang := "en"
 	extra := "gotagsavaruus.com/tags/4d171524-eee2-4a4c-b188-452a9a253db8"
 
-	d := map[string]string{
+	din := map[string]string{
 		"name":     name,
 		"email":    email,
 		"password": password,
@@ -76,7 +76,7 @@ func TestDebugAPIGetPendingJoin(t *testing.T) {
 		"extra":    extra,
 	}
 
-	response := doPost(t, paths["join"], []byte(marshallAny(t, d)), "")
+	response := doPost(t, paths["join"], []byte(marshallAny(t, din)), "")
 	checkResponseCode(t, response, http.StatusCreated)
 	checkResponseBody(t, response, "")
 
@@ -85,13 +85,13 @@ func TestDebugAPIGetPendingJoin(t *testing.T) {
 	response = doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var out pending
-	err := json.Unmarshal(response.Body.Bytes(), &out)
+	var dout pending
+	err := json.Unmarshal(response.Body.Bytes(), &dout)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall pending output: %s", err)
 	}
-	if out.Category != category || len(out.Pending) != 1 {
-		t.Fatalf("Unexpected data: %s", out)
+	if dout.Category != category || len(dout.Pending) != 1 {
+		t.Fatalf("Unexpected data: %s", dout)
 	}
 }
 
@@ -103,13 +103,13 @@ func TestDebugAPIGetPendingJoinEmpty(t *testing.T) {
 	response := doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var out pending
-	err := json.Unmarshal(response.Body.Bytes(), &out)
+	var dout pending
+	err := json.Unmarshal(response.Body.Bytes(), &dout)
 	if err != nil {
 		t.Fatalf("Failed to unmarshall pending output: %s", err)
 	}
-	if out.Category != category || len(out.Pending) != 0 {
-		t.Fatalf("Unexpected pending output. Got %s, %d. Want %s, %d", out.Category, len(out.Pending), category, 0)
+	if dout.Category != category || len(dout.Pending) != 0 {
+		t.Fatalf("Unexpected pending output. Got %s, %d. Want %s, %d", dout.Category, len(dout.Pending), category, 0)
 
 	}
 }
@@ -139,8 +139,8 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 		"password": "password4",
 	}}
 
-	for _, d := range data {
-		response := doPost(t, paths["join"], []byte(marshallAny(t, d)), "")
+	for _, din := range data {
+		response := doPost(t, paths["join"], []byte(marshallAny(t, din)), "")
 		checkResponseCode(t, response, http.StatusCreated)
 		checkResponseBody(t, response, "")
 	}
@@ -150,38 +150,38 @@ func TestDebugAPIGetPendingJoinMultiple(t *testing.T) {
 	response := doGet(t, p, "")
 	checkResponseCode(t, response, http.StatusOK)
 
-	var got pending
-	err := json.Unmarshal(response.Body.Bytes(), &got)
+	var out1 pending
+	err := json.Unmarshal(response.Body.Bytes(), &out1)
 	if err != nil {
-		t.Fatalf("failed to unmarshall pending data: %s", err)
+		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 
 	for i := range data {
 		email1, name1, password1, _, extra1 := data[i]["email"], data[i]["name"], data[i]["password"], data[i]["lang"], data[i]["extra"]
 		id2, email2, name2, hash2, extra2 := joins[i]["id"], joins[i]["email"], joins[i]["name"], joins[i]["password_hash"], joins[i]["extra"]
 
-		k := got.Pending[i]
+		k := out1.Pending[i]
 		d := k.Data
 
 		id3, email3, name3, hash3, extra3 := k.ID, k.Email, d["name"], d["password_hash"], d["extra"]
 
 		if id2 != id3 {
-			t.Fatalf("#%d: Unexpected id in join data. Got %s. Want %s", i, id3, id2)
+			t.Fatalf("#%d: Unexpected id in data. Got %s. Want %s", i, id3, id2)
 		}
 		if email2 != email1 || email3 != email1 {
-			t.Fatalf("#%d: unexpected email in join data. Got %s. Want %s", i, email3, email1)
+			t.Fatalf("#%d: unexpected email in data. Got %s. Want %s", i, email3, email1)
 		}
 		if name2 != name1 || name3 != name1 {
-			t.Fatalf("#%d: unexpected name in join data. Got %s. Want %s", i, name3, name1)
+			t.Fatalf("#%d: unexpected name in data. Got %s. Want %s", i, name3, name1)
 		}
 		if hash2 != hash3 {
-			t.Fatalf("#%d: unexpected password hash in join data. Got %s. Want %s", i, hash3, hash2)
+			t.Fatalf("#%d: unexpected password hash in data. Got %s. Want %s", i, hash3, hash2)
 		}
 		if bcrypt.CompareHashAndPassword([]byte(hash3), []byte(password1)) != nil {
-			t.Fatalf("#%d: unexpected password hash in join", i)
+			t.Fatalf("#%d: unexpected password hash in data", i)
 		}
 		if extra2 != extra1 || extra3 != extra1 {
-			t.Fatalf("#%d: unexpected extra in join data. Got %s. Want %s", i, extra3, extra1)
+			t.Fatalf("#%d: unexpected extra in data. Got %s. Want %s", i, extra3, extra1)
 		}
 	}
 }
