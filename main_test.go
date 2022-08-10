@@ -1614,7 +1614,7 @@ func TestAddTags(t *testing.T) {
 	}
 	assertUserDataTags(t, dout1, []string{tag1})
 	for _, tag := range dout1.Tags {
-		assertTimestamp(t, tag.Connected, start, time.Now())
+		assertTimestamp(t, tag.Added, start, time.Now())
 		if tag.Accessed != "" || tag.ActedOn != "" {
 			t.Fatalf("accessed and acted_on timestamps not empty strings")
 		}
@@ -1851,7 +1851,7 @@ func TestRemoveTagsIgnored(t *testing.T) {
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 1)
 
-	// already disconnected
+	// already removed
 	din3 := map[string]any{
 		"tags": []string{tag1},
 	}
@@ -1902,7 +1902,7 @@ func TestRemoveTagsFails(t *testing.T) {
 	checkResponseCode(t, response, http.StatusOK)
 	assertUserTagCount(t, user, 0)
 
-	// already disconnected
+	// already removed
 	din4 := map[string]any{
 		"tags": []string{tag1},
 	}
@@ -2293,7 +2293,7 @@ func TestTagAccessed(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertUserDataTags(t, dout1, []string{tag1, tag2})
-	assertTagsConnected(t, dout1.Tags)
+	assertTagsAdded(t, dout1.Tags)
 
 	// connect tags to user2
 	response = doPost(t, paths["auth_data_tags"], []byte(marshallAny(t, din1)), session2)
@@ -2306,7 +2306,7 @@ func TestTagAccessed(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertUserDataTags(t, dout2, []string{tag1, tag2})
-	assertTagsConnected(t, dout2.Tags)
+	assertTagsAdded(t, dout2.Tags)
 
 	// user1 accesses tag1
 	p := pathWithParam(paths["auth_tags"], ":id", tag1)
@@ -2323,7 +2323,7 @@ func TestTagAccessed(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertTagAccessed(t, dout3.Tags[0])
-	assertTagJustConnected(t, dout3.Tags[1])
+	assertTagAddedOnly(t, dout3.Tags[1])
 
 	time.Sleep(2 * time.Millisecond)
 
@@ -2351,7 +2351,7 @@ func TestTagAccessed(t *testing.T) {
 		t.Fatalf("tag1 accessed did not change")
 	}
 
-	// get user 2 data and check all still connected
+	// get user 2 data and check all still added
 	response = doGet(t, paths["auth_data"], session2)
 	checkResponseCode(t, response, http.StatusOK)
 
@@ -2360,7 +2360,7 @@ func TestTagAccessed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
-	assertTagsConnected(t, dout5.Tags)
+	assertTagsAdded(t, dout5.Tags)
 }
 
 func TestTagActedOn(t *testing.T) {
@@ -2393,7 +2393,7 @@ func TestTagActedOn(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertUserDataTags(t, dout1, []string{tag1, tag2})
-	assertTagsConnected(t, dout1.Tags)
+	assertTagsAdded(t, dout1.Tags)
 
 	// connect tags to user2
 	response = doPost(t, paths["auth_data_tags"], []byte(marshallAny(t, din1)), session2)
@@ -2406,7 +2406,7 @@ func TestTagActedOn(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertUserDataTags(t, dout2, []string{tag1, tag2})
-	assertTagsConnected(t, dout2.Tags)
+	assertTagsAdded(t, dout2.Tags)
 
 	// user 1 acts on tag 1
 	d2 := tagDataIn{map[string]any{
@@ -2426,7 +2426,7 @@ func TestTagActedOn(t *testing.T) {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
 	assertTagActedOn(t, dout3.Tags[0])
-	assertTagJustConnected(t, dout3.Tags[1])
+	assertTagAddedOnly(t, dout3.Tags[1])
 
 	time.Sleep(1 * time.Millisecond) // ensure time tags change
 
@@ -2454,7 +2454,7 @@ func TestTagActedOn(t *testing.T) {
 		t.Fatalf("tag1 accessed did not change")
 	}
 
-	// get user 2 data and check all still connected
+	// get user 2 data and check all still added
 	response = doGet(t, paths["auth_data"], session2)
 	checkResponseCode(t, response, http.StatusOK)
 
@@ -2463,5 +2463,5 @@ func TestTagActedOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to unmarshall data: %s", err)
 	}
-	assertTagsConnected(t, dout5.Tags)
+	assertTagsAdded(t, dout5.Tags)
 }

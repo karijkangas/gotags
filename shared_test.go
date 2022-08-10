@@ -134,13 +134,13 @@ type profileData struct {
 }
 
 type tagStatus struct {
-	ID        string `json:"id" binding:"required,uuid"`
-	Name      string `json:"name" binding:"required,min=1"`
-	Category  string `json:"category" binding:"required,min=1"`
-	Modified  string `json:"modified" binding:"required,min=1"`
-	Connected string `json:"connected"`
-	Accessed  string `json:"accessed"`
-	ActedOn   string `json:"acted_on"`
+	ID       string `json:"id" binding:"required,uuid"`
+	Name     string `json:"name" binding:"required,min=1"`
+	Category string `json:"category" binding:"required,min=1"`
+	Modified string `json:"modified" binding:"required,min=1"`
+	Added    string `json:"added"`
+	Accessed string `json:"accessed"`
+	ActedOn  string `json:"acted_on"`
 }
 
 type tagOut struct {
@@ -797,26 +797,26 @@ func assertTagsEqual(t *testing.T, tag1, tag2 tagStatus) {
 	}
 }
 
-func assertTagsConnected(t *testing.T, tags []tagStatus) {
+func assertTagsAdded(t *testing.T, tags []tagStatus) {
 	for _, tag := range tags {
-		if tag.Connected == "" || tag.Accessed != "" || tag.ActedOn != "" {
-			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		if tag.Added == "" || tag.Accessed != "" || tag.ActedOn != "" {
+			t.Fatalf("%s: tag not added %s", failPrefix(t, 1), tag)
 		}
 	}
 }
 
-func assertTagJustConnected(t *testing.T, tags ...tagStatus) {
+func assertTagAddedOnly(t *testing.T, tags ...tagStatus) {
 	for _, tag := range tags {
-		if tag.Connected == "" || tag.Accessed != "" || tag.ActedOn != "" {
-			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		if tag.Added == "" || tag.Accessed != "" || tag.ActedOn != "" {
+			t.Fatalf("%s: tag not added %s", failPrefix(t, 1), tag)
 		}
 	}
 }
 
-func assertTagConnected(t *testing.T, tags ...tagStatus) {
+func assertTagAdded(t *testing.T, tags ...tagStatus) {
 	for _, tag := range tags {
-		if tag.Connected == "" {
-			t.Fatalf("%s: tag not connected %s", failPrefix(t, 1), tag)
+		if tag.Added == "" {
+			t.Fatalf("%s: tag not added %s", failPrefix(t, 1), tag)
 		}
 	}
 }
@@ -853,7 +853,7 @@ func assertTagCount(t *testing.T, want int) {
 func addUserTag(t *testing.T, user int, tag string, eventAt time.Time) {
 	_, err := app.pool.Exec(context.Background(),
 		`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-		 VALUES ($1, $2, 'connected', $3);`,
+		 VALUES ($1, $2, 'added', $3);`,
 		user, tag, eventAt)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
@@ -865,7 +865,7 @@ func assertUserTagCount(t *testing.T, user int, want int) {
 	err := app.pool.QueryRow(
 		context.Background(),
 		`SELECT COUNT(tag_id) FROM tag_events
-		 WHERE user_id = $1 AND category = 'connected';`, user).Scan(&count)
+		 WHERE user_id = $1 AND category = 'added';`, user).Scan(&count)
 	if err != nil {
 		t.Fatalf("%s: query failed: %s", failPrefix(t, 1), err)
 	}
@@ -899,12 +899,16 @@ func assertUserTagEventCount(t *testing.T, user int, tag string, want int) {
 }
 
 func assertTagOut(t *testing.T, got tagOut, want tagOut) {
-	temp := got.ModifiedAt
-	// TODO: validate got.ModifiedAt somehow?
-	got.ModifiedAt = ""
+	var temp string
+	if want.ModifiedAt == "" {
+		temp = got.ModifiedAt
+		got.ModifiedAt = ""
+	}
 	gots := fmt.Sprintf("%v", got)
 	wants := fmt.Sprintf("%v", want)
-	got.ModifiedAt = temp
+	if temp != "" {
+		got.ModifiedAt = temp
+	}
 	if gots != wants {
 		t.Fatalf("%s: tag data does not match: Got %s. Want %s", failPrefix(t, 1), gots, wants)
 	}

@@ -217,7 +217,7 @@ DROP TABLE IF EXISTS tag_events CASCADE;
 CREATE TABLE IF NOT EXISTS tag_events (
   user_id INTEGER,
   tag_id UUID NOT NULL,
-  category TEXT NOT NULL,   -- 'connected', 'accessed', 'acted_on'
+  category TEXT NOT NULL,   -- 'added', 'accessed', 'acted_on'
   event_at TIMESTAMP WITH TIME ZONE default now_utc(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_tag FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE

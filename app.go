@@ -304,30 +304,30 @@ func queryProfileDataTx(tx pgx.Tx, user int) (data map[string]any, timestamp tim
 }
 
 type tagrow struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Category  string `json:"category"`
-	Modified  string `json:"modified"`
-	Connected string `json:"connected"`
-	Accessed  string `json:"accessed"`
-	ActedOn   string `json:"acted_on"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Modified string `json:"modified"`
+	Added    string `json:"added"`
+	Accessed string `json:"accessed"`
+	ActedOn  string `json:"acted_on"`
 }
 
-type byConnected []tagrow
+type byAdded []tagrow
 
-func (t byConnected) Len() int {
+func (t byAdded) Len() int {
 	return len(t)
 }
-func (t byConnected) Swap(i, j int) {
+func (t byAdded) Swap(i, j int) {
 	t[i], t[j] = t[j], t[i]
 }
-func (t byConnected) Less(i, j int) bool {
+func (t byAdded) Less(i, j int) bool {
 	ti := t[i]
 	tj := t[j]
-	if ti.Connected == tj.Connected {
+	if ti.Added == tj.Added {
 		return ti.Name < tj.Name
 	}
-	return ti.Connected < tj.Connected
+	return ti.Added < tj.Added
 }
 
 func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
@@ -355,8 +355,8 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 			t.Category = category
 
 			switch event {
-			case "connected":
-				t.Connected = jstime(eventAt)
+			case "added":
+				t.Added = jstime(eventAt)
 			case "accessed":
 				t.Accessed = jstime(eventAt)
 			case "acted_on":
@@ -378,8 +378,8 @@ func queryTagsTx(tx pgx.Tx, user int) ([]tagrow, error) {
 		tagrows = append(tagrows, *tagmap[k])
 	}
 
-	// sort by connected timestamp and by tag name
-	sort.Sort(byConnected(tagrows))
+	// sort by added timestamp and by tag name
+	sort.Sort(byAdded(tagrows))
 
 	return tagrows, nil
 }
@@ -1295,7 +1295,7 @@ func (a *GoTags) addTags(c *gin.Context) {
 
 	for _, t := range tags {
 		b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-				 VALUES ($1, $2, 'connected', now_utc())
+				 VALUES ($1, $2, 'added', now_utc())
 				 ON CONFLICT (user_id, tag_id, category) DO NOTHING;`, user, t)
 	}
 
@@ -1545,23 +1545,30 @@ func (a *GoTags) getTag(c *gin.Context) {
 	})
 }
 
-type tagFunc func(currentData, updateData map[string]any) (newData map[string]any, ok bool)
+type tagFunc func(currentData, incomingData map[string]any) (resultData map[string]any, ok bool)
 
-func nopHandler(currentData, updateData map[string]any) (map[string]any, bool) {
-	return updateData, true
+func nopHandler(currentData, incomingData map[string]any) (map[string]any, bool) {
+	return incomingData, true
 }
 
-func counterHandler(currentData, updateData map[string]any) (map[string]any, bool) {
-	counter, ok := (currentData["counter"]).(int)
+func counterHandler(currentData, incomingData map[string]any) (map[string]any, bool) {
+	counter := (currentData["counter"]).(float64)
+	operation, ok := (incomingData["operation"]).(string)
 	if ok {
-		updateData["counter"] = counter + 1
-		return updateData, true
+		switch operation {
+		case "increment":
+			currentData["counter"] = counter + 1
+			return currentData, true
+		default:
+			return currentData, false
+		}
 	}
-	return updateData, false
+	return currentData, false
 }
 
-func anticounterHandler(currentData, updateData map[string]any) (map[string]any, bool) {
-	return updateData, true
+func anticounterHandler(currentData, incomingData map[string]any) (map[string]any, bool) {
+	// TODO
+	return incomingData, true
 }
 
 var tagHandlers = map[string]tagFunc{
@@ -1680,7 +1687,7 @@ func (a *GoTags) updateTag(c *gin.Context) {
 			"id":          tag,
 			"name":        name,
 			"category":    category,
-			"data":        data,
+			"data":        newData,
 			"modified_at": jstime(modifiedAt),
 		},
 		"acted_on": jstime(eventAt),

@@ -509,7 +509,7 @@ func TestAdminAddTagFlow(t *testing.T) {
 	if len(dout6.Tags) != 1 {
 		t.Fatalf("unexpected number of tags. Got %d. Want 1", len(dout6.Tags))
 	}
-	assertTagConnected(t, dout6.Tags...)
+	assertTagAdded(t, dout6.Tags...)
 	assertTagAccessed(t, dout6.Tags...)
 	assertTagActedOn(t, dout6.Tags...)
 
