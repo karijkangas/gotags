@@ -949,17 +949,8 @@ func renewSession(t *testing.T, session string, modifiedAt time.Time) {
 	}
 }
 
-func fromTTL(t *testing.T, ttl string, addDays int) time.Time {
-	var value int
-	var unit string
-	fmt.Sscanf(ttl, "%d %s", &value, &unit)
-
-	if unit != "days" {
-		t.Fatalf("%s: unexpected unit. Got %s. Want days", failPrefix(t, 1), unit)
-	}
-	tt := time.Now().AddDate(0, 0, -value+addDays)
-	return tt
-
+func fromTTL(t *testing.T, ttlDays, addDays int) time.Time {
+	return time.Now().AddDate(0, 0, -ttlDays+addDays)
 }
 
 func getPendingTime(t *testing.T, addDays int) (pending time.Time) {

@@ -2,13 +2,6 @@ SET TIME ZONE 'UTC';
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-DROP TABLE IF EXISTS limits CASCADE;
-DROP TABLE IF EXISTS pending CASCADE;
-DROP TABLE IF EXISTS limiter CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
-DROP TABLE IF EXISTS profiles CASCADE;
-DROP TABLE IF EXISTS sessions CASCADE;
-
 -- ********** common **********
 
 CREATE OR REPLACE FUNCTION now_utc()
@@ -25,6 +18,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ********** limits **********
+DROP TABLE IF EXISTS limits CASCADE;
 
 CREATE TABLE IF NOT EXISTS limits (
   id INT NOT NULL PRIMARY KEY DEFAULT 1,
@@ -39,37 +33,38 @@ CREATE TABLE IF NOT EXISTS limits (
 INSERT INTO limits VALUES (1) ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION get_pending_limit()
-RETURNS int AS $$
+RETURNS INT AS $$
     SELECT pending
     FROM limits WHERE id = 1
 $$ language sql;
 
 CREATE OR REPLACE FUNCTION get_sessions_limit()
-RETURNS int AS $$
+RETURNS INT AS $$
     SELECT sessions
     FROM limits WHERE id = 1
 $$ language sql;
 
 CREATE OR REPLACE FUNCTION get_emails_limit()
-RETURNS int AS $$
+RETURNS INT AS $$
     SELECT emails
     FROM limits WHERE id = 1
 $$ language sql;
 
 -- ********** pending **********
+DROP TABLE IF EXISTS pending CASCADE;
 
 CREATE TABLE IF NOT EXISTS pending (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   email TEXT NOT NULL,
   category TEXT NOT NULL,
-  data JSONB not null default '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc()
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
 CREATE OR REPLACE FUNCTION check_pending_capacity()
   RETURNS TRIGGER AS $$
 BEGIN
-  IF (SELECT count(*) FROM pending as p1
+  IF (SELECT count(*) FROM pending AS p1
       WHERE p1.email = NEW.email) >= get_pending_limit()
   THEN
     RAISE EXCEPTION 'pending: no capacity';
@@ -83,12 +78,13 @@ BEFORE INSERT ON pending
 FOR EACH ROW EXECUTE PROCEDURE check_pending_capacity();
 
 -- ********** limiter **********
+DROP TABLE IF EXISTS limiter CASCADE;
 
 CREATE TABLE IF NOT EXISTS limiter (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL,
   counter INT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   CONSTRAINT max_email_limit CHECK (counter BETWEEN 1 AND get_emails_limit())
 );
 
@@ -96,13 +92,14 @@ ALTER SEQUENCE limiter_id_seq RESTART;
 CREATE UNIQUE INDEX IF NOT EXISTS limiter_idx ON limiter(email, counter);
 
 -- ********** users **********
+DROP TABLE IF EXISTS users CASCADE;
 
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
@@ -117,11 +114,12 @@ FOR EACH ROW
 EXECUTE FUNCTION trigger_update_modified_at();
 
 -- ********** profiles **********
+DROP TABLE IF EXISTS profiles CASCADE;
 
 CREATE TABLE IF NOT EXISTS profiles (
   id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  data JSONB not null default '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
@@ -149,18 +147,19 @@ CREATE TRIGGER create_user_profile
      EXECUTE PROCEDURE create_user_profile();
 
 -- ********** sessions **********
+DROP TABLE IF EXISTS sessions CASCADE;
 
 CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
 CREATE OR REPLACE FUNCTION check_sessions_capacity()
   RETURNS TRIGGER AS $$
 BEGIN
-  IF (SELECT count(*) FROM sessions as s1 WHERE s1.user_id = NEW.user_id) >= get_sessions_limit()
+  IF (SELECT count(*) FROM sessions AS s1 WHERE s1.user_id = NEW.user_id) >= get_sessions_limit()
   THEN
     RAISE EXCEPTION 'sessions: no capacity';
   END IF;
@@ -175,14 +174,13 @@ BEFORE INSERT ON sessions
 FOR EACH ROW EXECUTE PROCEDURE check_sessions_capacity();
 
 -- ********** tag_catalog **********
-
 DROP TABLE IF EXISTS tag_catalog CASCADE;
 
 CREATE TABLE IF NOT EXISTS tag_catalog (
   id SERIAL PRIMARY KEY,
   category TEXT NOT NULL UNIQUE,
-  default_data JSONB not null default '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  default_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
@@ -191,15 +189,14 @@ INSERT INTO tag_catalog (category, default_data) VALUES ('counter', '{"counter":
 INSERT INTO tag_catalog (category, default_data) VALUES ('anticounter', '{}');
 
 -- ********** tags **********
-
 DROP TABLE IF EXISTS tags CASCADE;
 
 CREATE TABLE IF NOT EXISTS tags (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   category TEXT NOT NULL,
-  data JSONB not null default '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
 );
 
@@ -211,14 +208,13 @@ FOR EACH ROW
 EXECUTE FUNCTION trigger_update_modified_at();
 
 -- ********** tag_events **********
-
 DROP TABLE IF EXISTS tag_events CASCADE;
 
 CREATE TABLE IF NOT EXISTS tag_events (
   user_id INTEGER,
   tag_id UUID NOT NULL,
   category TEXT NOT NULL,   -- 'added', 'accessed', 'acted_on'
-  event_at TIMESTAMP WITH TIME ZONE default now_utc(),
+  event_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_tag FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
 );
@@ -226,18 +222,22 @@ CREATE TABLE IF NOT EXISTS tag_events (
 CREATE UNIQUE INDEX IF NOT EXISTS tag_events_idx ON tag_events (user_id, tag_id, category);
 
 -- ********** admins **********
+DROP TABLE IF EXISTS admins CASCADE;
 
 CREATE TABLE IF NOT EXISTS admins (
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS admins_idx ON admins (user_id);
 
 -- ********** admin_sessions **********
+DROP TABLE IF EXISTS admin_sessions CASCADE;
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE default now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );

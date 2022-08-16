@@ -20,14 +20,13 @@ import (
 )
 
 const (
-	// dangerous, keep backups todo
 	passwordHashCost = bcrypt.DefaultCost
-	cleanupDBTimeUTC = "04:00"
-	pendingTTL       = "1 days"
-	sessionTTL       = "30 days"
-	adminSessionTTL  = "1 days"
-	emailTTL         = "1 days"
 	maxBodySize      = 10240
+	cleanupDBTimeUTC = "04:00"
+	pendingTTL       = 1  // days
+	sessionTTL       = 30 // days
+	adminSessionTTL  = 1  // days
+	emailTTL         = 1  // days
 )
 
 var paths = map[string]string{
@@ -242,10 +241,10 @@ func (a *GoTags) cleanupDB() {
 	log.Println("Running database cleanup")
 
 	b := &pgx.Batch{} // todo obv
-	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%s';`, pendingTTL))
-	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%s';`, sessionTTL))
-	b.Queue(fmt.Sprintf(`DELETE FROM admin_sessions WHERE created_at < now() - interval '%s';`, adminSessionTTL))
-	b.Queue(fmt.Sprintf(`DELETE FROM limiter WHERE created_at < now() - interval '%s';`, emailTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%d days';`, pendingTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%d days';`, sessionTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM admin_sessions WHERE created_at < now() - interval '%d days';`, adminSessionTTL))
+	b.Queue(fmt.Sprintf(`DELETE FROM limiter WHERE created_at < now() - interval '%d days';`, emailTTL))
 	r := a.pool.SendBatch(context.Background(), b)
 	defer r.Close()
 
@@ -1294,8 +1293,8 @@ func (a *GoTags) addTags(c *gin.Context) {
 	b := &pgx.Batch{}
 
 	for _, t := range tags {
-		b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-				 VALUES ($1, $2, 'added', now_utc())
+		b.Queue(`INSERT INTO tag_events (user_id, tag_id, category)
+				 VALUES ($1, $2, 'added')
 				 ON CONFLICT (user_id, tag_id, category) DO NOTHING;`, user, t)
 	}
 
@@ -1492,8 +1491,8 @@ func (a *GoTags) getTag(c *gin.Context) {
 	b.Queue(`SELECT name, category, data, modified_at FROM tags WHERE id = $1;`, tag)
 
 	// 2
-	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-	         VALUES ($1, $2, 'accessed', now_utc())
+	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category)
+	         VALUES ($1, $2, 'accessed')
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
 			 SET event_at=EXCLUDED.event_at
 			 RETURNING event_at;`, session.User, tag)
@@ -1640,8 +1639,8 @@ func (a *GoTags) updateTag(c *gin.Context) {
 
 	b.Queue(`UPDATE tags SET data = $1 WHERE id = $2 RETURNING modified_at;`, newData, tag)
 
-	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category, event_at)
-			 VALUES ($1, $2, 'acted_on', now_utc())
+	b.Queue(`INSERT INTO tag_events (user_id, tag_id, category)
+			 VALUES ($1, $2, 'acted_on')
 			 ON CONFLICT (user_id, tag_id, category) DO UPDATE
 			 SET event_at=EXCLUDED.event_at
 			 RETURNING event_at;`, session.User, tag)

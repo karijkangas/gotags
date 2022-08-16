@@ -482,7 +482,7 @@ paths:
           schema:
             $ref: "#/definitions/OUTUserData"
         "400":
-          description: Invalid password
+          description: Invalid data
         "401":
           description: Invalid token
         "410":
