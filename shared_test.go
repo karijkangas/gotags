@@ -970,11 +970,10 @@ func getEmailTime(t *testing.T, addDays int) (email time.Time) {
 }
 
 func assertTimestamp(t *testing.T, timestamp string, start, end time.Time) {
-	ends := jstime(end.UTC())
-	starts := jstime(start.UTC())
-
+	ends := jstime(end)
+	starts := jstime(start)
 	if timestamp < starts || timestamp > ends {
-		t.Fatalf("%s: invalid timestamp: %s", failPrefix(t, 1), timestamp)
+		t.Fatalf("%s: invalid timestamp: %s %s %s", failPrefix(t, 1), timestamp, starts, ends)
 	}
 }
 

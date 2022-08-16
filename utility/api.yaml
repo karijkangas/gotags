@@ -2,7 +2,7 @@ swagger: "2.0"
 info:
   contact:
     name: Kari Kangas (karijkangas@gmail.com)
-  description: "Data consists of 3 parts: {name, email} account data, user data, and token. With extra, join carries the original link over email. Maximum body size 10240 bytes, fields max 1024."
+  description: "Data consists of 3 parts: {name, email} account data, user data, and token. With extra, join carries the original link over email. Maximum body size 10240 bytes, fields max 1024. All timestamps in UTC."
   license:
     name: MIT
   title: Gotagsavaruus REST API

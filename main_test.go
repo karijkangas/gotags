@@ -2348,7 +2348,7 @@ func TestTagAccessed(t *testing.T) {
 	assertTagAccessed(t, dout4.Tags[0])
 	assertTagAccessed(t, dout4.Tags[1])
 	if dout4.Tags[0].Accessed == dout3.Tags[0].Accessed {
-		t.Fatalf("tag1 accessed did not change")
+		t.Fatalf("tag1 accessed did not change %v", dout4.Tags[0].Accessed)
 	}
 
 	// get user 2 data and check all still added

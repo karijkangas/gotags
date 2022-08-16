@@ -1,18 +1,14 @@
+SET client_min_messages TO WARNING;
 SET TIME ZONE 'UTC';
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ********** common **********
 
-CREATE OR REPLACE FUNCTION now_utc()
-RETURNS TIMESTAMP WITH TIME ZONE AS $$
-  SELECT now() AT TIME ZONE 'utc'
-$$ LANGUAGE sql;
-
 CREATE OR REPLACE FUNCTION trigger_update_modified_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.modified_at = now_utc();
+  NEW.modified_at = now();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -58,7 +54,7 @@ CREATE TABLE IF NOT EXISTS pending (
   email TEXT NOT NULL,
   category TEXT NOT NULL,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 CREATE OR REPLACE FUNCTION check_pending_capacity()
@@ -84,7 +80,7 @@ CREATE TABLE IF NOT EXISTS limiter (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL,
   counter INT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   CONSTRAINT max_email_limit CHECK (counter BETWEEN 1 AND get_emails_limit())
 );
 
@@ -99,8 +95,8 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_idx ON users (email) INCLUDE (id, email);
@@ -119,8 +115,8 @@ DROP TABLE IF EXISTS profiles CASCADE;
 CREATE TABLE IF NOT EXISTS profiles (
   id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 DROP TRIGGER IF EXISTS set_profiles_timestamp ON profiles;
@@ -152,8 +148,10 @@ DROP TABLE IF EXISTS sessions CASCADE;
 CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  -- created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  -- modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 CREATE OR REPLACE FUNCTION check_sessions_capacity()
@@ -180,8 +178,8 @@ CREATE TABLE IF NOT EXISTS tag_catalog (
   id SERIAL PRIMARY KEY,
   category TEXT NOT NULL UNIQUE,
   default_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 INSERT INTO tag_catalog (category, default_data) VALUES ('nop', '{}');
@@ -196,8 +194,8 @@ CREATE TABLE IF NOT EXISTS tags (
   name TEXT NOT NULL,
   category TEXT NOT NULL,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
-  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc()
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  modified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
 DROP TRIGGER IF EXISTS set_tags_timestamp ON tags;
@@ -214,7 +212,7 @@ CREATE TABLE IF NOT EXISTS tag_events (
   user_id INTEGER,
   tag_id UUID NOT NULL,
   category TEXT NOT NULL,   -- 'added', 'accessed', 'acted_on'
-  event_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  event_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_tag FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
 );
@@ -226,7 +224,7 @@ DROP TABLE IF EXISTS admins CASCADE;
 
 CREATE TABLE IF NOT EXISTS admins (
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -238,6 +236,6 @@ DROP TABLE IF EXISTS admin_sessions CASCADE;
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id UUID PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now_utc(),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   CONSTRAINT fk_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );

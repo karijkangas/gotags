@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	passwordHashCost = bcrypt.DefaultCost
-	maxBodySize      = 10240
-	cleanupDBTimeUTC = "04:00"
-	pendingTTL       = 1  // days
-	sessionTTL       = 30 // days
-	adminSessionTTL  = 1  // days
-	emailTTL         = 1  // days
+	javascriptISOString = "2006-01-02T15:04:05.000Z07:00"
+	passwordHashCost    = bcrypt.DefaultCost
+	maxBodySize         = 10240
+	cleanupDBTimeUTC    = "04:00"
+	pendingTTL          = 1  // days
+	sessionTTL          = 30 // days
+	adminSessionTTL     = 1  // days
+	emailTTL            = 1  // days
 )
 
 var paths = map[string]string{
@@ -174,7 +175,13 @@ func furtherValidateEmail(pool *pgxpool.Pool, email string) bool {
 /* initialize connects to database, sets up gin router and initializes (a *GoTags).
 It also activates hooks and the scheduler. CALLED from main. */
 func (a *GoTags) initialize(databaseURL string) {
-	pool, err := pgxpool.Connect(context.Background(), databaseURL)
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		log.Fatalf("Unable to parse database config: %v\n", err)
+	}
+	config.ConnConfig.RuntimeParams["timezone"] = "UTC" // important
+
+	pool, err := pgxpool.ConnectConfig(context.Background(), config)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
@@ -240,7 +247,7 @@ func (a *GoTags) initialize(databaseURL string) {
 func (a *GoTags) cleanupDB() {
 	log.Println("Running database cleanup")
 
-	b := &pgx.Batch{} // todo obv
+	b := &pgx.Batch{}
 	b.Queue(fmt.Sprintf(`DELETE FROM pending WHERE created_at < now() - interval '%d days';`, pendingTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM sessions WHERE modified_at < now() - interval '%d days';`, sessionTTL))
 	b.Queue(fmt.Sprintf(`DELETE FROM admin_sessions WHERE created_at < now() - interval '%d days';`, adminSessionTTL))
@@ -269,7 +276,7 @@ func (a *GoTags) run(server string) {
 
 // convert time.Time to JavaScript new Date compatible format
 func jstime(t time.Time) string {
-	return t.Format("2006-01-02T15:04:05.000Z")
+	return t.UTC().Format(javascriptISOString)
 }
 
 // ******************************************************************

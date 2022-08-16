@@ -32,6 +32,8 @@ Create debian 11 (qemu) vm image:
 - gotags/gotags
 
 ```shell
+sudo timedatectl set-timezone UTC
+
 apt-get install sudo vim cifs-utils ansible
 
 usermod -aG sudo gotags
