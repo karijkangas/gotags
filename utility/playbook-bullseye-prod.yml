@@ -5,7 +5,7 @@
       golang_gopath: "$HOME/workspace-go"
   become: yes
   vars:
-    app_path: /vm-share
+    app_path: /home/gotags/gotags
     api_user: gotags
     domain: gotagsavaruus.com
   tasks:
@@ -25,13 +25,8 @@
         name:
           - apt-transport-https
           - build-essential
-          - curl
-          - wget
-          - git
           - "linux-headers-{{ ansible_kernel }}"
           - lsb-release
-          - vim
-          - tmux
 
     # DB
     - name: Install PostgreSQL database server
@@ -94,7 +89,7 @@
 
     - name: copy nginx site.conf
       template:
-        src: /vm-share/utility/site.conf.j2
+        src: /vm-share/utility/site-prod.conf.j2
         dest: /etc/nginx/sites-enabled/{{ domain }}
         owner: root
         group: root
@@ -103,7 +98,7 @@
 
     # Extra dependencies
     - name: List API OS deps
-      shell: grep -v "#" "{{ app_path }}/utility/requirements-bullseye.apt" | grep -v "^\s*$";
+      shell: grep -v "#" "{{ app_path }}/utility/requirements-bullseye-prod.apt" | grep -v "^\s*$";
       register: api_deps_result
       ignore_errors: True
 
